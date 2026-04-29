@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Abu Star Diamonds</string>
+    <string name="app_subtitle">Trust · Purity · Elegance</string>
+
+    <!-- Auth -->
+    <string name="enter_pin">Enter Secure PIN</string>
+    <string name="create_pin">Create Secure PIN</string>
+    <string name="confirm_pin">Confirm PIN</string>
+    <string name="pin_mismatch">PINs don\'t match</string>
+    <string name="pin_wrong">Incorrect PIN</string>
+    <string name="forgot_pin">Forgot PIN?</string>
+    <string name="encrypted_session">Encrypted Session</string>
+
+    <!-- Navigation -->
+    <string name="nav_dashboard">Inventory</string>
+    <string name="nav_billing">Billing</string>
+    <string name="nav_history">History</string>
+    <string name="nav_settings">Settings</string>
+    <string name="nav_clients">Clients</string>
+
+    <!-- Dashboard -->
+    <string name="market_pulse">Market Pulse</string>
+    <string name="daily_summary">Daily Ledger Summary</string>
+    <string name="total_amount">Total Amount</string>
+    <string name="net_weight">Net Weight</string>
+    <string name="invoices_issued">Invoices Issued</string>
+    <string name="operations">Operations</string>
+    <string name="new_bill">New Bill</string>
+    <string name="add_customer">Add Customer</string>
+    <string name="manual_backup">Manual Backup</string>
+    <string name="pure_gold_24k">Pure Gold 24K</string>
+    <string name="standard_22k">Standard 22K</string>
+    <string name="luxury_18k">Luxury 18K</string>
+    <string name="per_10_grams">Per 10 Grams</string>
+
+    <!-- Billing -->
+    <string name="new_invoice">New Invoice</string>
+    <string name="customer_step">Customer</string>
+    <string name="items_step">Inventory</string>
+    <string name="payment_step">Payment</string>
+    <string name="identify_client">Identify Client</string>
+    <string name="new_client">New Client</string>
+    <string name="register_continue">Register &amp; Continue</string>
+    <string name="gross_weight">Gross Wt (G)</string>
+    <string name="less_weight">Less Wt (G)</string>
+    <string name="net_weight_g">Net Wt (G)</string>
+    <string name="purity_percent">Purity %</string>
+    <string name="making_per_gram">Making /G</string>
+    <string name="stone_value">Stone Val</string>
+    <string name="gold_rate">Gold Rate</string>
+    <string name="add_item">Add Item to Bill</string>
+    <string name="save_invoice">Save Invoice</string>
+
+    <!-- Customer -->
+    <string name="clientele">Clientele</string>
+    <string name="total_clients">Total Active Clients</string>
+    <string name="global_gold_position">Global Net Gold Position</string>
+    <string name="view_ledger">View Ledger</string>
+    <string name="quick_bill">Quick Bill</string>
+    <string name="status_customer_owes">Status: Customer Owes</string>
+    <string name="status_we_owe">Status: We Owe</string>
+    <string name="status_balanced">Status: Balanced</string>
+
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="company_profile">Company Profile</string>
+    <string name="appearance">Appearance</string>
+    <string name="dark_theme">Dark Theme</string>
+    <string name="language">Language</string>
+    <string name="security">Security</string>
+    <string name="change_pin">Change PIN</string>
+    <string name="biometric_auth">Biometric Authentication</string>
+    <string name="auto_lock">Auto-Lock</string>
+    <string name="backup_sync">Backup &amp; Sync</string>
+    <string name="auto_daily_backup">Auto Daily Backup</string>
+
+    <!-- Gold Rates -->
+    <string name="gold_rates">Gold Rates</string>
+    <string name="rate_24k">24K Rate</string>
+    <string name="rate_22k">22K Rate</string>
+    <string name="rate_18k">18K Rate</string>
+    <string name="gst_percent">GST Percentage</string>
+
+    <!-- Melting -->
+    <string name="melting_module">Melting Module</string>
+    <string name="raw_weight">Raw Weight</string>
+    <string name="final_pure_weight">Final Pure Weight</string>
+    <string name="old_jewellery_exchange">Old Jewellery Exchange</string>
+</resources>

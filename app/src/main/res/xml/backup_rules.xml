@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Backup rules: exclude sensitive DB and prefs from Android auto backup.
+   We handle our own encrypted backup.
+-->
+<full-backup-content>
+    <exclude domain="database" path="goldsmith_vault.db" />
+    <exclude domain="sharedpref" path="goldsmith_secure_prefs.xml" />
+    <exclude domain="sharedpref" path="goldsmith_settings.preferences_pb" />
+</full-backup-content>

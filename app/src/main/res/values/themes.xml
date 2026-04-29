@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GoldsmithBilling" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowTranslucentStatus">true</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+
+    <style name="Theme.GoldsmithBilling.SplashScreen" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#131313</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/abu_star_logo</item>
+                <item name="postSplashScreenTheme">@style/Theme.GoldsmithBilling</item>
+    </style>
+</resources>

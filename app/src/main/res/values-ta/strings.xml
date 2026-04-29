@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">லூப் &amp; லெட்ஜர்</string>
+    <string name="app_subtitle">தங்கச்சாலை பில்லிங் தொகுப்பு</string>
+
+    <!-- Auth -->
+    <string name="enter_pin">பாதுகாப்பு PIN உள்ளிடவும்</string>
+    <string name="create_pin">PIN உருவாக்கவும்</string>
+    <string name="confirm_pin">PIN உறுதிப்படுத்தவும்</string>
+    <string name="pin_mismatch">PIN பொருந்தவில்லை</string>
+    <string name="pin_wrong">தவறான PIN</string>
+    <string name="forgot_pin">PIN மறந்துவிட்டீர்களா?</string>
+    <string name="encrypted_session">மறைகுறியாக்கப்பட்ட அமர்வு</string>
+
+    <!-- Navigation -->
+    <string name="nav_dashboard">சரக்கு</string>
+    <string name="nav_billing">பில்லிங்</string>
+    <string name="nav_history">வரலாறு</string>
+    <string name="nav_settings">அமைப்புகள்</string>
+    <string name="nav_clients">வாடிக்கையாளர்கள்</string>
+
+    <!-- Dashboard -->
+    <string name="market_pulse">சந்தை நாடி</string>
+    <string name="daily_summary">தினசரி கணக்கு சுருக்கம்</string>
+    <string name="total_amount">மொத்த தொகை</string>
+    <string name="net_weight">நிகர எடை</string>
+    <string name="invoices_issued">வழங்கிய விலைப்பட்டியல்கள்</string>
+    <string name="operations">செயல்பாடுகள்</string>
+    <string name="new_bill">புதிய பில்</string>
+    <string name="add_customer">வாடிக்கையாளர் சேர்க்க</string>
+    <string name="manual_backup">கைமுறை காப்புப்பிரதி</string>
+    <string name="pure_gold_24k">தூய தங்கம் 24K</string>
+    <string name="standard_22k">நிலையான 22K</string>
+    <string name="luxury_18k">ஆடம்பர 18K</string>
+    <string name="per_10_grams">10 கிராமுக்கு</string>
+
+    <!-- Billing -->
+    <string name="new_invoice">புதிய விலைப்பட்டியல்</string>
+    <string name="customer_step">வாடிக்கையாளர்</string>
+    <string name="items_step">பொருட்கள்</string>
+    <string name="payment_step">கட்டணம்</string>
+    <string name="identify_client">வாடிக்கையாளரை அடையாளம் காண</string>
+    <string name="new_client">புதிய வாடிக்கையாளர்</string>
+    <string name="register_continue">பதிவு செய்து தொடர்க</string>
+    <string name="gross_weight">மொத்த எடை (கி)</string>
+    <string name="less_weight">குறைப்பு எடை (கி)</string>
+    <string name="net_weight_g">நிகர எடை (கி)</string>
+    <string name="purity_percent">தூய்மை %</string>
+    <string name="making_per_gram">செய்கூலி /கி</string>
+    <string name="stone_value">கல் மதிப்பு</string>
+    <string name="gold_rate">தங்க விலை</string>
+    <string name="add_item">பொருள் சேர்க்க</string>
+    <string name="save_invoice">விலைப்பட்டியல் சேமிக்க</string>
+
+    <!-- Customer -->
+    <string name="clientele">வாடிக்கையாளர்கள்</string>
+    <string name="total_clients">மொத்த வாடிக்கையாளர்கள்</string>
+    <string name="global_gold_position">மொத்த தங்க நிலை</string>
+    <string name="view_ledger">கணக்கு பார்க்க</string>
+    <string name="quick_bill">விரைவு பில்</string>
+    <string name="status_customer_owes">நிலை: வாடிக்கையாளர் கடன்</string>
+    <string name="status_we_owe">நிலை: நாம் கடன்</string>
+    <string name="status_balanced">நிலை: சமப்படுத்தப்பட்டது</string>
+
+    <!-- Settings -->
+    <string name="settings">அமைப்புகள்</string>
+    <string name="company_profile">நிறுவன விவரம்</string>
+    <string name="appearance">தோற்றம்</string>
+    <string name="dark_theme">இருண்ட கருப்பொருள்</string>
+    <string name="language">மொழி</string>
+    <string name="security">பாதுகாப்பு</string>
+    <string name="change_pin">PIN மாற்றவும்</string>
+    <string name="biometric_auth">கைரேகை அங்கீகாரம்</string>
+    <string name="auto_lock">தானியங்கி பூட்டு</string>
+    <string name="backup_sync">காப்புப்பிரதி &amp; ஒத்திசைவு</string>
+    <string name="auto_daily_backup">தினசரி தானியங்கி காப்புப்பிரதி</string>
+
+    <!-- Gold Rates -->
+    <string name="gold_rates">தங்க விலைகள்</string>
+    <string name="rate_24k">24K விலை</string>
+    <string name="rate_22k">22K விலை</string>
+    <string name="rate_18k">18K விலை</string>
+    <string name="gst_percent">GST சதவீதம்</string>
+
+    <!-- Melting -->
+    <string name="melting_module">உருக்கு தொகுதி</string>
+    <string name="raw_weight">மூல எடை</string>
+    <string name="final_pure_weight">இறுதி தூய எடை</string>
+    <string name="old_jewellery_exchange">பழைய நகை மாற்றம்</string>
+</resources>
