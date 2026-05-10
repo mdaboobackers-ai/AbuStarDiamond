@@ -29,6 +29,7 @@ import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.customer.CustomerCard
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.GoldCalc
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
@@ -50,19 +51,31 @@ data class BillItemDraft(
 ) {
     val grossW get() = grossWeight.toDoubleOrNull() ?: 0.0
     val lessW get() = lessWeight.toDoubleOrNull() ?: 0.0
-    val netW get() = (grossW - lessW).coerceAtLeast(0.0)
+    val netW get() = GoldCalc.netWeight(grossW, lessW)
     val purity get() = purityPercent.toDoubleOrNull() ?: 91.6
-    val fineGold get() = netW * (purity / 100.0)
+    val fineGold get() = GoldCalc.fineGold(netW, purity)
     val makingPg get() = makingPerGram.toDoubleOrNull() ?: 0.0
-    
-    // Core Formula: F = C * ((D + E) / 100) -> where E is making as a "percent-like" addition to purity
-    // The user requirement says "F = C * ((D + E) / 100)". 
-    // This keeps calculation in GRAMS.
-    val gramsWithMaking get() = netW * ((purity + makingPg) / 100.0)
+    val gramsWithMaking get() = fineGold
     
     val stoneVal get() = stoneValue.toDoubleOrNull() ?: 0.0
     
-    fun amount(rate24K: Double) = (gramsWithMaking * rate24K) + stoneVal
+    fun amount(rate24K: Double) = GoldCalc.itemAmount(netW, purity, rate24K, makingPg, stoneVal)
+}
+
+data class LessWeightRow(
+    val count: String = "",
+    val grams: String = ""
+) {
+    val total get() = (count.toDoubleOrNull() ?: 0.0) * (grams.toDoubleOrNull() ?: 0.0)
+}
+
+data class GoldPaymentDraft(
+    val id: Int = System.currentTimeMillis().toInt(),
+    val grams: String = "",
+    val karat: Int = 22
+) {
+    val gramsValue get() = grams.toDoubleOrNull() ?: 0.0
+    val pureGold get() = GoldCalc.pureGoldFromKarat(gramsValue, karat)
 }
 
 // ─── ViewModel ────────────────────────────────────────────────────────────────
@@ -71,6 +84,7 @@ class BillingViewModel @Inject constructor(
     private val customerDao: CustomerDao,
     private val invoiceDao: InvoiceDao,
     private val billItemDao: BillItemDao,
+    private val invoicePaymentDao: InvoicePaymentDao,
     private val meltingDao: MeltingDao,
     private val settingsRepo: SettingsRepository
 ) : ViewModel() {
@@ -91,9 +105,9 @@ class BillingViewModel @Inject constructor(
 
     // Payment
     var cashPaid by mutableStateOf("0")
-    var goldPaidGrams by mutableStateOf("0")
-    var goldPaidKarat by mutableStateOf(24)
+    var goldPayments by mutableStateOf(listOf(GoldPaymentDraft()))
     var usePreviousBalance by mutableStateOf(false)
+    var fieldErrors by mutableStateOf<Map<String, String>>(emptyMap())
 
     fun initialize(customerId: Long?) {
         if (customerId != null && selectedCustomer == null) {
@@ -113,13 +127,38 @@ class BillingViewModel @Inject constructor(
     fun addItem() { items = items + BillItemDraft() }
     fun removeItem(idx: Int) { if (items.size > 1) items = items.toMutableList().also { it.removeAt(idx) } }
     fun updateItem(idx: Int, draft: BillItemDraft) { items = items.toMutableList().also { it[idx] = draft } }
+    fun addGoldPayment() { goldPayments = goldPayments + GoldPaymentDraft() }
+    fun removeGoldPayment(idx: Int) { if (goldPayments.size > 1) goldPayments = goldPayments.toMutableList().also { it.removeAt(idx) } }
+    fun updateGoldPayment(idx: Int, draft: GoldPaymentDraft) { goldPayments = goldPayments.toMutableList().also { it[idx] = draft } }
 
     fun totalAmount(rate: Double) = items.sumOf { it.amount(rate) }
     fun totalWeight() = items.sumOf { it.netW }
     fun totalFineGold() = items.sumOf { it.fineGold }
     fun totalGramsWithMaking() = items.sumOf { it.gramsWithMaking }
+    fun totalGoldPaidValue(rate: Double) = goldPayments.sumOf { GoldCalc.goldPaymentValue(it.gramsValue, it.karat, rate) }
+    fun totalGoldPaidPure() = goldPayments.sumOf { it.pureGold }
+
+    private fun validateBeforeSave(): Boolean {
+        val errors = linkedMapOf<String, String>()
+        if (selectedCustomer == null) errors["customer"] = "Select customer"
+        items.forEachIndexed { idx, item ->
+            if (!GoldCalc.isValidDecimal(item.grossWeight, allowZero = false)) errors["gross_$idx"] = "Enter valid number"
+            if (!GoldCalc.isValidDecimal(item.lessWeight)) errors["less_$idx"] = "Enter valid number"
+            if (!GoldCalc.isValidDecimal(item.purityPercent, allowZero = false)) errors["purity_$idx"] = "Enter valid number"
+            if (!GoldCalc.isValidDecimal(item.makingPerGram)) errors["making_$idx"] = "Enter valid number"
+        }
+        if (!GoldCalc.isValidDecimal(cashPaid)) errors["cash"] = "Enter valid number"
+        goldPayments.forEachIndexed { idx, payment ->
+            if (payment.grams.isNotBlank() && !GoldCalc.isValidDecimal(payment.grams, allowZero = false)) {
+                errors["gold_$idx"] = "Enter valid number"
+            }
+        }
+        fieldErrors = errors
+        return errors.isEmpty()
+    }
 
     fun saveInvoice(onSaved: (Long) -> Unit) = viewModelScope.launch {
+        if (!validateBeforeSave()) return@launch
         val customer = selectedCustomer ?: return@launch
         val s = settings.value
         val rate = s.goldRate24K
@@ -130,10 +169,11 @@ class BillingViewModel @Inject constructor(
         val total = subtotal + gstAmount
         
         val cash = cashPaid.toDoubleOrNull() ?: 0.0
-        val goldGrams = goldPaidGrams.toDoubleOrNull() ?: 0.0
-        val goldPaidVal = goldGrams * rate * (goldPaidKarat / 24.0)
+        val payableGoldPayments = goldPayments.filter { it.gramsValue > 0.0 }
+        val goldGrams = payableGoldPayments.sumOf { it.gramsValue }
+        val goldPaidVal = payableGoldPayments.sumOf { GoldCalc.goldPaymentValue(it.gramsValue, it.karat, rate) }
         val prevBal = if (usePreviousBalance) customer.cashBalance else 0.0
-        val remaining = total - cash - goldPaidVal - prevBal
+        val remaining = GoldCalc.roundMoney(total - cash - goldPaidVal - prevBal)
 
         val counter = settingsRepo.incrementInvoiceCounter()
         val prefix = s.userPrefix.ifEmpty { "INV" }
@@ -144,17 +184,21 @@ class BillingViewModel @Inject constructor(
             userPrefix = s.userPrefix,
             invoiceNumber = invoiceNum,
             customerId = customer.id,
+            customerShopName = customer.companyName.ifEmpty { customer.name },
+            customerOwnerName = customer.name,
+            customerAddress = customer.address,
+            customerPhone = customer.phone,
             date = Date(),
             totalWeightGrams = totalWeight(),
             totalFineGoldGrams = totalFineGold(),
-            total916Grams = totalFineGold() / 0.916,
+            total916Grams = GoldCalc.equivalent916(totalFineGold()),
             subtotal = subtotal,
             gstPercent = gst,
             gstAmount = gstAmount,
             totalAmount = total,
             cashPaid = cash,
             goldPaidGrams = goldGrams,
-            goldPaidKarat = goldPaidKarat,
+            goldPaidKarat = payableGoldPayments.firstOrNull()?.karat ?: 24,
             previousBalanceAdjusted = prevBal,
             remainingBalance = remaining,
             paymentStatus = when {
@@ -184,21 +228,39 @@ class BillingViewModel @Inject constructor(
         }
         billItemDao.insertBillItems(billItems)
 
+        if (cash > 0.0) {
+            invoicePaymentDao.insertPayment(InvoicePayment(
+                invoiceId = invoiceId,
+                amount = cash,
+                paymentMode = "CASH",
+                notes = "Initial invoice payment"
+            ))
+        }
+        payableGoldPayments.forEach { payment ->
+            invoicePaymentDao.insertPayment(InvoicePayment(
+                invoiceId = invoiceId,
+                goldGrams = payment.gramsValue,
+                goldKarat = payment.karat,
+                paymentMode = "GOLD",
+                notes = "Initial invoice gold payment"
+            ))
+        }
+
         // Sync with melting if gold was paid
-        if (goldGrams > 0) {
-            val pureEquivalent = goldGrams * (goldPaidKarat / 24.0)
+        payableGoldPayments.forEach { payment ->
+            val pureEquivalent = payment.pureGold
             meltingDao.insertMeltingRecord(MeltingRecord(
                 customerId = customer.id,
-                rawWeightGrams = goldGrams,
+                rawWeightGrams = payment.gramsValue,
                 finalPureWeightGrams = pureEquivalent,
-                purityPercent = (goldPaidKarat / 24.0) * 100.0,
+                purityPercent = (payment.karat / 24.0) * 100.0,
                 notes = "Auto-generated from Invoice #$invoiceNum",
                 linkedInvoiceId = invoiceId
             ))
         }
 
         // Update customer balance
-        customerDao.updateCustomer(customer.copy(cashBalance = remaining, goldBalanceGrams = customer.goldBalanceGrams - (goldGrams * (goldPaidKarat / 24.0)), updatedAt = Date()))
+        customerDao.updateCustomer(customer.copy(cashBalance = remaining, goldBalanceGrams = customer.goldBalanceGrams - totalGoldPaidPure(), updatedAt = Date()))
         onSaved(invoiceId)
     }
 }
@@ -250,7 +312,9 @@ fun BillingScreen(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             // Step indicator
-            StepIndicator(viewModel.currentStep)
+            StepIndicator(viewModel.currentStep) { step ->
+                if (step < viewModel.currentStep) viewModel.currentStep = step
+            }
 
             when (viewModel.currentStep) {
                 0 -> CustomerStep(viewModel) { viewModel.currentStep = 1 }
@@ -262,7 +326,7 @@ fun BillingScreen(
 }
 
 @Composable
-private fun StepIndicator(current: Int) {
+private fun StepIndicator(current: Int, onStepClick: (Int) -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -276,6 +340,7 @@ private fun StepIndicator(current: Int) {
                 Box(
                     Modifier.size(40.dp)
                         .clip(androidx.compose.foundation.shape.CircleShape)
+                        .clickable(enabled = idx < current) { onStepClick(idx) }
                         .background(if (active || done) AuraColors.PrimaryContainer else AuraColors.GlassWhite5)
                         .border(1.dp, if (active || done) AuraColors.PrimaryContainer else AuraColors.GlassWhite20, androidx.compose.foundation.shape.CircleShape),
                     contentAlignment = Alignment.Center
@@ -413,6 +478,8 @@ private fun ItemsStep(viewModel: BillingViewModel, rate24K: Double) {
             BillItemCard(
                 draft = draft,
                 rate24K = rate24K,
+                errors = viewModel.fieldErrors,
+                index = idx,
                 onUpdate = { viewModel.updateItem(idx, it) },
                 onRemove = { viewModel.removeItem(idx) },
                 canRemove = viewModel.items.size > 1
@@ -437,7 +504,15 @@ private fun ItemsStep(viewModel: BillingViewModel, rate24K: Double) {
 }
 
 @Composable
-private fun BillItemCard(draft: BillItemDraft, rate24K: Double, onUpdate: (BillItemDraft) -> Unit, onRemove: () -> Unit, canRemove: Boolean) {
+private fun BillItemCard(
+    draft: BillItemDraft,
+    rate24K: Double,
+    errors: Map<String, String>,
+    index: Int,
+    onUpdate: (BillItemDraft) -> Unit,
+    onRemove: () -> Unit,
+    canRemove: Boolean
+) {
     val puritiesMap = mapOf(
         "24K (100%)" to 100.0, 
         "22K (91.6%)" to 91.6, 
@@ -446,12 +521,14 @@ private fun BillItemCard(draft: BillItemDraft, rate24K: Double, onUpdate: (BillI
         "14K (58.5%)" to 58.5
     )
     var expandedDropdown by remember { mutableStateOf(false) }
+    var showLessDialog by remember { mutableStateOf(false) }
+    var confirmRemove by remember { mutableStateOf(false) }
 
     GlassCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("DESCRIPTION", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), letterSpacing = 1.sp, fontSize = 9.sp)
-                if (canRemove) IconButton(onClick = onRemove, modifier = Modifier.size(24.dp)) {
+                if (canRemove) IconButton(onClick = { confirmRemove = true }, modifier = Modifier.size(24.dp)) {
                     Icon(Icons.Default.Delete, null, tint = AuraColors.Error.copy(alpha = 0.6f), modifier = Modifier.size(18.dp))
                 }
             }
@@ -474,8 +551,13 @@ private fun BillItemCard(draft: BillItemDraft, rate24K: Double, onUpdate: (BillI
 
             // Weights row
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                BillField("GROSS WT (G)", draft.grossWeight, { onUpdate(draft.copy(grossWeight = it)) }, Modifier.weight(1f))
-                BillField("LESS WT (G)", draft.lessWeight, { onUpdate(draft.copy(lessWeight = it)) }, Modifier.weight(1f))
+                BillField("GROSS WT (G)", draft.grossWeight, { onUpdate(draft.copy(grossWeight = it)) }, Modifier.weight(1f), errors["gross_$index"])
+                Column(Modifier.weight(1f).clickable { showLessDialog = true }) {
+                    BillField("LESS WT (G)", draft.lessWeight, { onUpdate(draft.copy(lessWeight = it)) }, Modifier.fillMaxWidth(), errors["less_$index"])
+                    TextButton(onClick = { showLessDialog = true }, modifier = Modifier.align(Alignment.End)) {
+                        Text("OPEN LESS TABLE", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, fontSize = 9.sp)
+                    }
+                }
             }
 
             // Net weight display
@@ -524,7 +606,7 @@ private fun BillItemCard(draft: BillItemDraft, rate24K: Double, onUpdate: (BillI
                         }
                     }
                 }
-                BillField("MAKING /G", draft.makingPerGram, { onUpdate(draft.copy(makingPerGram = it)) }, Modifier.weight(1f))
+                BillField("MAKING /G", draft.makingPerGram, { onUpdate(draft.copy(makingPerGram = it)) }, Modifier.weight(1f), errors["making_$index"])
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -556,10 +638,37 @@ private fun BillItemCard(draft: BillItemDraft, rate24K: Double, onUpdate: (BillI
             }
         }
     }
+
+    if (showLessDialog) {
+        LessWeightDialog(
+            currentLess = draft.lessWeight,
+            onDismiss = { showLessDialog = false },
+            onSave = { total ->
+                onUpdate(draft.copy(lessWeight = String.format("%.3f", total)))
+                showLessDialog = false
+            }
+        )
+    }
+    if (confirmRemove) {
+        AlertDialog(
+            onDismissRequest = { confirmRemove = false },
+            containerColor = AuraColors.SurfaceContainerHigh,
+            title = { Text("Remove item?", color = AuraColors.OnSurface) },
+            text = { Text("Are you sure you want to delete this bill item?", color = AuraColors.OnSurfaceVariant) },
+            confirmButton = { GoldButton("Delete", onClick = { confirmRemove = false; onRemove() }) },
+            dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }
+        )
+    }
 }
 
 @Composable
-private fun BillField(label: String, value: String, onUpdate: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun BillField(
+    label: String,
+    value: String,
+    onUpdate: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    error: String? = null
+) {
     Column(modifier) {
         Text(label, style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), fontSize = 9.sp)
         Spacer(Modifier.height(4.dp))
@@ -567,6 +676,7 @@ private fun BillField(label: String, value: String, onUpdate: (String) -> Unit, 
             value = value,
             onValueChange = onUpdate,
             modifier = Modifier.fillMaxWidth(),
+            isError = error != null,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = AuraColors.PrimaryContainer,
@@ -579,7 +689,66 @@ private fun BillField(label: String, value: String, onUpdate: (String) -> Unit, 
             shape = RoundedCornerShape(8.dp),
             singleLine = true
         )
+        if (error != null) {
+            Text(error, color = AuraColors.Error, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp)
+        }
     }
+}
+
+@Composable
+private fun LessWeightDialog(currentLess: String, onDismiss: () -> Unit, onSave: (Double) -> Unit) {
+    var rows by remember { mutableStateOf(listOf(LessWeightRow())) }
+    val total = rows.sumOf { it.total }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AuraColors.SurfaceContainerHigh,
+        title = { Text("Less Weight Table", color = AuraColors.OnSurface) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Count", Modifier.weight(1f), color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                    Text("Gram", Modifier.weight(1f), color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                    Text("Total", Modifier.weight(1f), color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                }
+                rows.forEachIndexed { idx, row ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(row.count, {
+                            rows = rows.toMutableList().also { list ->
+                                list[idx] = row.copy(count = it)
+                                if (idx == list.lastIndex && (it.isNotBlank() || row.grams.isNotBlank())) list.add(LessWeightRow())
+                            }
+                        }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                        OutlinedTextField(row.grams, {
+                            rows = rows.toMutableList().also { list ->
+                                list[idx] = row.copy(grams = it)
+                                if (idx == list.lastIndex && (it.isNotBlank() || row.count.isNotBlank())) list.add(LessWeightRow())
+                            }
+                        }, modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(String.format("%.3f", row.total), color = AuraColors.OnSurface)
+                            if (rows.size > 1 && idx < rows.lastIndex) {
+                                IconButton(onClick = { rows = rows.toMutableList().also { it.removeAt(idx) } }, modifier = Modifier.size(28.dp)) {
+                                    Icon(Icons.Default.Delete, null, tint = AuraColors.Error, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(color = AuraColors.GlassWhite10)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Existing", color = AuraColors.OnSurfaceVariant)
+                    Text("${currentLess.ifBlank { "0" }}g", color = AuraColors.OnSurfaceVariant)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Total", color = AuraColors.OnSurface, fontWeight = FontWeight.Bold)
+                    Text("${String.format("%.3f", total)}g", color = AuraColors.PrimaryContainer, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        confirmButton = { GoldButton("Apply Less", onClick = { onSave(total) }) },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }
+    )
 }
 
 // ─── Step 3: Payment ──────────────────────────────────────────────────────────
@@ -589,8 +758,10 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
     val gstAmount = subtotal * settings.gstPercent / 100.0
     val total = subtotal + gstAmount
     val cashP = viewModel.cashPaid.toDoubleOrNull() ?: 0.0
-    val goldPaidValue = (viewModel.goldPaidGrams.toDoubleOrNull() ?: 0.0) * settings.goldRate24K * (viewModel.goldPaidKarat / 24.0)
-    val remaining = total - cashP - goldPaidValue
+    val goldPaidValue = viewModel.totalGoldPaidValue(settings.goldRate24K)
+    val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0
+    val remaining = total - cashP - goldPaidValue - previousBalance
+    val remainingGold = if (settings.goldRate24K > 0) (remaining.coerceAtLeast(0.0) / settings.goldRate24K) else 0.0
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -603,9 +774,10 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
                     Text("Bill Summary", style = MaterialTheme.typography.headlineMedium, color = AuraColors.OnSurface)
                     SummaryRow("Total Weight", "${String.format("%.3f", viewModel.totalWeight())}g")
                     SummaryRow("Pure Gold (24K)", "${String.format("%.3f", viewModel.totalFineGold())}g")
-                    SummaryRow("91.6 Eq. Grams", "${String.format("%.3f", viewModel.totalFineGold() / 0.916)}g")
+                    SummaryRow("91.6 Gold", "${String.format("%.3f", GoldCalc.equivalent916(viewModel.totalFineGold()))}g")
                     HorizontalDivider(color = AuraColors.GlassWhite10)
-                    SummaryRow("Sub Total", "₹${String.format("%,.2f", subtotal)}")
+                    SummaryRow("Sub Total Grams", "${String.format("%.3f", viewModel.totalWeight())}g")
+                    SummaryRow("Amount Subtotal", "₹${String.format("%,.2f", subtotal)}")
                     SummaryRow("GST (${settings.gstPercent}%)", "₹${String.format("%,.2f", gstAmount)}")
                     HorizontalDivider(color = AuraColors.PrimaryContainer.copy(alpha = 0.3f))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -620,8 +792,27 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
             GlassCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Payment", style = MaterialTheme.typography.headlineMedium, color = AuraColors.OnSurface)
-                    BillField("CASH PAID (₹)", viewModel.cashPaid, { viewModel.cashPaid = it }, Modifier.fillMaxWidth())
-                    BillField("GOLD PAID (grams)", viewModel.goldPaidGrams, { viewModel.goldPaidGrams = it }, Modifier.fillMaxWidth())
+                    BillField("CASH PAID (₹)", viewModel.cashPaid, { viewModel.cashPaid = it }, Modifier.fillMaxWidth(), viewModel.fieldErrors["cash"])
+                    Text("Gold Payment", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.6f), fontSize = 10.sp)
+                    viewModel.goldPayments.forEachIndexed { idx, payment ->
+                        GoldPaymentRow(
+                            payment = payment,
+                            error = viewModel.fieldErrors["gold_$idx"],
+                            canRemove = viewModel.goldPayments.size > 1,
+                            onUpdate = { viewModel.updateGoldPayment(idx, it) },
+                            onRemove = { viewModel.removeGoldPayment(idx) }
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = viewModel::addGoldPayment,
+                        modifier = Modifier.fillMaxWidth(),
+                        border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Add, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("ADD GOLD SPLIT", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer)
+                    }
                     
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
@@ -632,11 +823,67 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
                         Text("Include previous balance (${viewModel.selectedCustomer?.cashBalance?.let { "₹${String.format("%,.2f", it)}" } ?: "N/A"})", color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                     }
                     HorizontalDivider(color = AuraColors.GlassWhite10)
-                    SummaryRow("Remaining Balance", "₹${String.format("%,.2f", remaining.coerceAtLeast(0.0))}", valueColor = if (remaining > 0) AuraColors.Error else AuraColors.Primary)
+                    SummaryRow(
+                        "Remaining Balance",
+                        "₹${String.format("%,.2f", remaining.coerceAtLeast(0.0))} OR ${String.format("%.3f", remainingGold)}g pure gold",
+                        valueColor = if (remaining > 0) AuraColors.Error else AuraColors.Primary
+                    )
                 }
             }
         }
         item { Spacer(Modifier.height(100.dp)) }
+    }
+}
+
+@Composable
+private fun GoldPaymentRow(
+    payment: GoldPaymentDraft,
+    error: String?,
+    canRemove: Boolean,
+    onUpdate: (GoldPaymentDraft) -> Unit,
+    onRemove: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+        BillField("GRAMS", payment.grams, { onUpdate(payment.copy(grams = it)) }, Modifier.weight(1f), error)
+        Column(Modifier.weight(1f)) {
+            Text("CARAT", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), fontSize = 9.sp)
+            Spacer(Modifier.height(4.dp))
+            ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+                OutlinedTextField(
+                    value = "${payment.karat}K",
+                    onValueChange = {},
+                    readOnly = true,
+                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AuraColors.PrimaryContainer,
+                        unfocusedBorderColor = AuraColors.GlassWhite10,
+                        focusedTextColor = AuraColors.OnSurface,
+                        unfocusedTextColor = AuraColors.OnSurface,
+                        focusedContainerColor = AuraColors.GlassWhite5,
+                        unfocusedContainerColor = Color.Transparent
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                    listOf(24, 22, 20, 18).forEach { karat ->
+                        DropdownMenuItem(
+                            text = { Text("${karat}K") },
+                            onClick = {
+                                onUpdate(payment.copy(karat = karat))
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        if (canRemove) {
+            IconButton(onClick = onRemove, modifier = Modifier.padding(top = 18.dp)) {
+                Icon(Icons.Default.Delete, null, tint = AuraColors.Error.copy(alpha = 0.7f))
+            }
+        }
     }
 }
 
@@ -693,7 +940,7 @@ private fun BillingBottomBar(
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (step > 1) {
+                    if (step == 1) {
                         OutlinedButton(
                             onClick = onBack,
                             modifier = Modifier.height(48.dp),
@@ -704,7 +951,7 @@ private fun BillingBottomBar(
                         }
                     }
                     GoldButton(
-                        text = if (step == 2) "Save Invoice" else "Next →",
+                        text = if (step == 2) "Seal Invoice" else "Next",
                         onClick = onNext,
                         modifier = Modifier.height(48.dp).defaultMinSize(minWidth = 120.dp)
                     )

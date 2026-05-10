@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.*
 import com.goldsmith.billing.data.repository.SettingsRepository
+import com.goldsmith.billing.worker.BirthdayAlertWorker
 import com.goldsmith.billing.worker.DailyBackupWorker
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.MainScope
@@ -28,6 +29,7 @@ class GoldsmithApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        BirthdayAlertWorker.schedule(this)
         
         MainScope().launch {
             settingsRepo.settingsFlow.collect { settings ->

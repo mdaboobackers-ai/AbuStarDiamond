@@ -58,6 +58,10 @@ class SettingsRepository @Inject constructor(
 
     suspend fun updateLanguage(lang: String) {
         context.dataStore.edit { it[LANGUAGE] = lang }
+        context.getSharedPreferences("goldsmith_settings", Context.MODE_PRIVATE)
+            .edit()
+            .putString("language", lang)
+            .apply()
     }
 
     suspend fun updateTheme(isDark: Boolean) {

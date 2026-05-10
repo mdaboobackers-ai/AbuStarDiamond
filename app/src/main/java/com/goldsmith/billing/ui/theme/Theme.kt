@@ -2,6 +2,10 @@ package com.goldsmith.billing.ui.theme
 
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -12,52 +16,78 @@ import androidx.compose.ui.unit.sp
 // ─── Aura Lumina Color Palette ────────────────────────────────────────────────
 object AuraColors {
     // Surfaces
-    val Surface              = Color(0xFF131313)
-    val SurfaceDim           = Color(0xFF131313)
-    val SurfaceBright        = Color(0xFF393939)
-    val SurfaceContainerLowest = Color(0xFF0E0E0E)
-    val SurfaceContainerLow  = Color(0xFF1C1B1B)
-    val SurfaceContainer     = Color(0xFF201F1F)
-    val SurfaceContainerHigh = Color(0xFF2A2A2A)
-    val SurfaceContainerHighest = Color(0xFF353534)
-    val OnSurface            = Color(0xFFE5E2E1)
-    val OnSurfaceVariant     = Color(0xFFD0C5AF)
+    var Surface by mutableStateOf(Color(0xFF131313))
+    var SurfaceDim by mutableStateOf(Color(0xFF131313))
+    var SurfaceBright by mutableStateOf(Color(0xFF393939))
+    var SurfaceContainerLowest by mutableStateOf(Color(0xFF0E0E0E))
+    var SurfaceContainerLow by mutableStateOf(Color(0xFF1C1B1B))
+    var SurfaceContainer by mutableStateOf(Color(0xFF201F1F))
+    var SurfaceContainerHigh by mutableStateOf(Color(0xFF2A2A2A))
+    var SurfaceContainerHighest by mutableStateOf(Color(0xFF353534))
+    var OnSurface by mutableStateOf(Color(0xFFE5E2E1))
+    var OnSurfaceVariant by mutableStateOf(Color(0xFFD0C5AF))
 
     // Primary (Gold)
-    val Primary              = Color(0xFFF2CA50)
-    val PrimaryContainer     = Color(0xFFD4AF37)
-    val OnPrimary            = Color(0xFF3C2F00)
-    val OnPrimaryContainer   = Color(0xFF554300)
-    val PrimaryFixedDim      = Color(0xFFE9C349)
+    var Primary by mutableStateOf(Color(0xFFF2CA50))
+    var PrimaryContainer by mutableStateOf(Color(0xFFD4AF37))
+    var OnPrimary by mutableStateOf(Color(0xFF3C2F00))
+    var OnPrimaryContainer by mutableStateOf(Color(0xFF554300))
+    var PrimaryFixedDim by mutableStateOf(Color(0xFFE9C349))
 
     // Secondary
-    val Secondary            = Color(0xFFC8C6C5)
-    val SecondaryContainer   = Color(0xFF474746)
-    val OnSecondary          = Color(0xFF313030)
-    val OnSecondaryContainer = Color(0xFFB7B5B4)
+    var Secondary by mutableStateOf(Color(0xFFC8C6C5))
+    var SecondaryContainer by mutableStateOf(Color(0xFF474746))
+    var OnSecondary by mutableStateOf(Color(0xFF313030))
+    var OnSecondaryContainer by mutableStateOf(Color(0xFFB7B5B4))
 
     // Outline
-    val Outline              = Color(0xFF99907C)
-    val OutlineVariant       = Color(0xFF4D4635)
+    var Outline by mutableStateOf(Color(0xFF99907C))
+    var OutlineVariant by mutableStateOf(Color(0xFF4D4635))
 
     // Error
-    val Error                = Color(0xFFFFB4AB)
-    val ErrorContainer       = Color(0xFF93000A)
-    val OnError              = Color(0xFF690005)
+    var Error by mutableStateOf(Color(0xFFFFB4AB))
+    var ErrorContainer by mutableStateOf(Color(0xFF93000A))
+    var OnError by mutableStateOf(Color(0xFF690005))
 
     // Background
-    val Background           = Color(0xFF131313)
-    val OnBackground         = Color(0xFFE5E2E1)
+    var Background by mutableStateOf(Color(0xFF131313))
+    var OnBackground by mutableStateOf(Color(0xFFE5E2E1))
 
     // Glass overlays
-    val GlassWhite5          = Color(0x0DFFFFFF)
-    val GlassWhite10         = Color(0x1AFFFFFF)
-    val GlassWhite12         = Color(0x1FFFFFFF)
-    val GlassWhite20         = Color(0x33FFFFFF)
-    val GlassBorder          = Color(0x1AFFFFFF)
+    var GlassWhite5 by mutableStateOf(Color(0x0DFFFFFF))
+    var GlassWhite10 by mutableStateOf(Color(0x1AFFFFFF))
+    var GlassWhite12 by mutableStateOf(Color(0x1FFFFFFF))
+    var GlassWhite20 by mutableStateOf(Color(0x33FFFFFF))
+    var GlassBorder by mutableStateOf(Color(0x1AFFFFFF))
 
     // Gold glow
-    val GoldGlow             = Color(0x33D4AF37)
+    var GoldGlow by mutableStateOf(Color(0x33D4AF37))
+
+    fun apply(dark: Boolean) {
+        if (dark) {
+            Surface = Color(0xFF131313); SurfaceDim = Color(0xFF131313); SurfaceBright = Color(0xFF393939)
+            SurfaceContainerLowest = Color(0xFF0E0E0E); SurfaceContainerLow = Color(0xFF1C1B1B)
+            SurfaceContainer = Color(0xFF201F1F); SurfaceContainerHigh = Color(0xFF2A2A2A); SurfaceContainerHighest = Color(0xFF353534)
+            OnSurface = Color(0xFFE5E2E1); OnSurfaceVariant = Color(0xFFD0C5AF)
+            Primary = Color(0xFFF2CA50); PrimaryContainer = Color(0xFFD4AF37); OnPrimary = Color(0xFF3C2F00); OnPrimaryContainer = Color(0xFF554300)
+            Secondary = Color(0xFFC8C6C5); SecondaryContainer = Color(0xFF474746); OnSecondary = Color(0xFF313030); OnSecondaryContainer = Color(0xFFB7B5B4)
+            Outline = Color(0xFF99907C); OutlineVariant = Color(0xFF4D4635); Error = Color(0xFFFFB4AB); ErrorContainer = Color(0xFF93000A); OnError = Color(0xFF690005)
+            Background = Color(0xFF131313); OnBackground = Color(0xFFE5E2E1)
+            GlassWhite5 = Color(0x0DFFFFFF); GlassWhite10 = Color(0x1AFFFFFF); GlassWhite12 = Color(0x1FFFFFFF); GlassWhite20 = Color(0x33FFFFFF); GlassBorder = Color(0x1AFFFFFF)
+            GoldGlow = Color(0x33D4AF37); PrimaryFixedDim = Color(0xFFE9C349)
+        } else {
+            Surface = Color(0xFFFFFBF2); SurfaceDim = Color(0xFFE8E1D2); SurfaceBright = Color(0xFFFFFFFF)
+            SurfaceContainerLowest = Color(0xFFFFFFFF); SurfaceContainerLow = Color(0xFFFFF8EA)
+            SurfaceContainer = Color(0xFFF8F0DF); SurfaceContainerHigh = Color(0xFFF1E7D4); SurfaceContainerHighest = Color(0xFFE8DCC5)
+            OnSurface = Color(0xFF211B10); OnSurfaceVariant = Color(0xFF6E6147)
+            Primary = Color(0xFF8B6F00); PrimaryContainer = Color(0xFFC49A20); OnPrimary = Color(0xFFFFFFFF); OnPrimaryContainer = Color(0xFF2B2100)
+            Secondary = Color(0xFF625B49); SecondaryContainer = Color(0xFFE9DFC8); OnSecondary = Color(0xFFFFFFFF); OnSecondaryContainer = Color(0xFF1F1B12)
+            Outline = Color(0xFF8D8067); OutlineVariant = Color(0xFFD3C6AA); Error = Color(0xFFBA1A1A); ErrorContainer = Color(0xFFFFDAD6); OnError = Color(0xFFFFFFFF)
+            Background = Color(0xFFFFFBF2); OnBackground = Color(0xFF211B10)
+            GlassWhite5 = Color(0x99FFFFFF); GlassWhite10 = Color(0xFFEFE5D1); GlassWhite12 = Color(0xFFF6EBD6); GlassWhite20 = Color(0xFFD9C9A9); GlassBorder = Color(0xFFD7C7A8)
+            GoldGlow = Color(0x44C49A20); PrimaryFixedDim = Color(0xFFC49A20)
+        }
+    }
 }
 
 // ─── Typography ───────────────────────────────────────────────────────────────
@@ -151,6 +181,7 @@ fun GoldsmithBillingTheme(
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    SideEffect { AuraColors.apply(darkTheme) }
 
     MaterialTheme(
         colorScheme = colorScheme,

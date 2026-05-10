@@ -14,6 +14,7 @@ data class SyncPayload(
     val customers: List<Customer>,
     val invoices: List<Invoice>,
     val billItems: List<BillItem>,
+    val invoicePayments: List<InvoicePayment>? = emptyList(),
     val meltingRecords: List<MeltingRecord>,
     val goldRates: List<GoldRate>,
     val companyProfile: CompanyProfile?,
@@ -44,11 +45,13 @@ class DataSyncManager(private val context: Context) {
             val allCustomers = db.customerDao().getAllCustomers().first()
             val allMelting = db.meltingDao().getAllMeltingRecords().first()
             val allRates = db.goldRateDao().getRateHistory().first()
+            val allPayments = db.invoicePaymentDao().getAllPayments().first()
             
             val payload = SyncPayload(
                 customers = allCustomers,
                 invoices = allInvoices,
                 billItems = fetchAllBillItems(allInvoices),
+                invoicePayments = allPayments,
                 meltingRecords = allMelting,
                 goldRates = allRates,
                 companyProfile = db.companyProfileDao().getProfileSync(),
@@ -97,7 +100,10 @@ class DataSyncManager(private val context: Context) {
         // 3. Bill Items
         remote.billItems.forEach { db.billItemDao().insertBillItem(it) }
 
-        // 4. Melting
+        // 4. Payments
+        remote.invoicePayments.orEmpty().forEach { db.invoicePaymentDao().insertPayment(it) }
+
+        // 5. Melting
         remote.meltingRecords.forEach { remoteMelt ->
             val localMelt = db.meltingDao().getMeltingRecordById(remoteMelt.id)
             if (localMelt == null) {
@@ -106,5 +112,7 @@ class DataSyncManager(private val context: Context) {
                 db.meltingDao().updateMeltingRecord(remoteMelt)
             }
         }
+
+        remote.companyProfile?.let { db.companyProfileDao().upsertProfile(it) }
     }
 }

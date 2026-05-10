@@ -12,6 +12,7 @@ import androidx.navigation.navArgument
 import com.goldsmith.billing.ui.auth.PinSetupScreen
 import com.goldsmith.billing.ui.auth.PinVerifyScreen
 import com.goldsmith.billing.ui.auth.PrefixSelectionScreen
+import com.goldsmith.billing.ui.analytics.AnalyticsDashboardScreen
 import com.goldsmith.billing.ui.backup.BackupScreen
 import com.goldsmith.billing.ui.billing.BillingScreen
 import com.goldsmith.billing.ui.customer.CustomerListScreen
@@ -20,6 +21,7 @@ import com.goldsmith.billing.ui.dashboard.DashboardScreen
 import com.goldsmith.billing.ui.history.InvoiceHistoryScreen
 import com.goldsmith.billing.ui.history.InvoiceDetailScreen
 import com.goldsmith.billing.ui.melting.MeltingScreen
+import com.goldsmith.billing.ui.ocr.HallmarkScannerScreen
 import com.goldsmith.billing.ui.settings.SettingsScreen
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.goldsmith.billing.ui.auth.AuthViewModel
@@ -44,6 +46,8 @@ sealed class Screen(val route: String) {
     object Melting       : Screen("melting")
     object Settings      : Screen("settings")
     object Backup        : Screen("backup")
+    object Analytics     : Screen("analytics")
+    object HallmarkScan  : Screen("hallmark_scan")
 }
 
 @Composable
@@ -96,7 +100,9 @@ fun GoldsmithNavGraph(
                 onHistory = { navController.navigate(Screen.InvoiceHistory.route) },
                 onCustomers = { navController.navigate(Screen.Customers.route) },
                 onSettings = { navController.navigate(Screen.Settings.route) },
-                onMelting = { navController.navigate(Screen.Melting.route) }
+                onMelting = { navController.navigate(Screen.Melting.route) },
+                onAnalytics = { navController.navigate(Screen.Analytics.route) },
+                onHallmarkScan = { navController.navigate(Screen.HallmarkScan.route) }
             )
         }
 
@@ -167,6 +173,14 @@ fun GoldsmithNavGraph(
 
         composable(Screen.Backup.route) {
             BackupScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.Analytics.route) {
+            AnalyticsDashboardScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(Screen.HallmarkScan.route) {
+            HallmarkScannerScreen(onBack = { navController.popBackStack() })
         }
     }
 }

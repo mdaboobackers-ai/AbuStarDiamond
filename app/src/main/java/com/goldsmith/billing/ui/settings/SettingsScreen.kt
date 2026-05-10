@@ -67,6 +67,7 @@ class SettingsViewModel @Inject constructor(
         companyProfileDao.upsertProfile(profile.copy(updatedAt = Date()))
     }
     fun updatePin(newPin: String) { keystoreManager.savePin(newPin) }
+    fun verifyPin(pin: String) = keystoreManager.verifyPin(pin)
     fun setBiometricEnabled(enabled: Boolean) = keystoreManager.setBiometricEnabled(enabled)
     fun isBiometricEnabled() = keystoreManager.isBiometricEnabled()
     fun updateAutoBackup(enabled: Boolean) = viewModelScope.launch {
@@ -96,6 +97,9 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel = hiltViewMo
     var showLockDialog by remember { mutableStateOf(false) }
     var showGstDialog by remember { mutableStateOf(false) }
     var showPrefixDialog by remember { mutableStateOf(false) }
+    var showBiometricConfirm by remember { mutableStateOf<Boolean?>(null) }
+    var biometricEnabled by remember { mutableStateOf(viewModel.isBiometricEnabled()) }
+    var showBackupInfo by remember { mutableStateOf(false) }
 
     // Gallery launcher for custom icon
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -449,9 +453,9 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel = hiltViewMo
                     SettingsToggle(
                         icon = Icons.Default.Fingerprint,
                         title = "Biometric Authentication",
-                        subtitle = "Use fingerprint to unlock",
-                        checked = viewModel.isBiometricEnabled(),
-                        onChecked = viewModel::setBiometricEnabled
+                        subtitle = if (biometricEnabled) "Fingerprint unlock is active" else "Use fingerprint to unlock",
+                        checked = biometricEnabled,
+                        onChecked = { showBiometricConfirm = it }
                     )
                     SettingsDivider()
                     SettingsItem(
@@ -483,7 +487,7 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel = hiltViewMo
                             java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.getDefault())
                                 .format(java.util.Date(settings.lastBackupTime))
                         else "Never backed up",
-                        onClick = {}
+                        onClick = { showBackupInfo = true }
                     )
                 }
             }
@@ -625,6 +629,45 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel = hiltViewMo
                     showPrefixDialog = false
                 })
             }
+        )
+    }
+
+    showBiometricConfirm?.let { requested ->
+        ConfirmPinDialog(
+            title = if (requested) "Enable biometric?" else "Disable biometric?",
+            message = "Confirm your PIN before changing biometric authentication.",
+            onDismiss = { showBiometricConfirm = null },
+            onConfirm = { pin, setError ->
+                if (viewModel.verifyPin(pin)) {
+                    viewModel.setBiometricEnabled(requested)
+                    biometricEnabled = requested
+                    showBiometricConfirm = null
+                } else {
+                    setError("Incorrect PIN")
+                }
+            }
+        )
+    }
+
+    if (showBackupInfo) {
+        val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context)
+        AlertDialog(
+            onDismissRequest = { showBackupInfo = false },
+            containerColor = AuraColors.SurfaceContainerHigh,
+            title = { Text("Backup Status", color = AuraColors.OnSurface) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (settings.lastBackupTime > 0)
+                            "Last backup: ${java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(settings.lastBackupTime))}"
+                        else "No successful backup recorded yet.",
+                        color = AuraColors.OnSurfaceVariant
+                    )
+                    Text("Google account: ${account?.email ?: "Not selected"}", color = AuraColors.OnSurfaceVariant)
+                    Text("Use Backup & Sync from the dashboard to run backup or restore.", color = AuraColors.OnSurfaceVariant)
+                }
+            },
+            confirmButton = { GoldButton("Close", onClick = { showBackupInfo = false }) }
         )
     }
 }
@@ -900,6 +943,48 @@ private fun ChangePinDialog(onDismiss: () -> Unit, onSave: (String) -> Unit) {
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel", color = AuraColors.OnSurfaceVariant) }
         }
+    )
+}
+
+@Composable
+private fun ConfirmPinDialog(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String, (String) -> Unit) -> Unit
+) {
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = AuraColors.SurfaceContainerHigh,
+        title = { Text(title, color = AuraColors.OnSurface) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(message, color = AuraColors.OnSurfaceVariant)
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { if (it.length <= 4) { pin = it; error = "" } },
+                    label = { Text("PIN") },
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    isError = error.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AuraColors.PrimaryContainer,
+                        unfocusedBorderColor = AuraColors.GlassWhite20,
+                        focusedTextColor = AuraColors.OnSurface,
+                        unfocusedTextColor = AuraColors.OnSurface,
+                        focusedContainerColor = AuraColors.GlassWhite5,
+                        unfocusedContainerColor = AuraColors.GlassWhite5
+                    ),
+                    shape = RoundedCornerShape(10.dp)
+                )
+                if (error.isNotEmpty()) Text(error, color = AuraColors.Error)
+            }
+        },
+        confirmButton = { GoldButton("Confirm", onClick = { onConfirm(pin) { error = it } }) },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }
     )
 }
 

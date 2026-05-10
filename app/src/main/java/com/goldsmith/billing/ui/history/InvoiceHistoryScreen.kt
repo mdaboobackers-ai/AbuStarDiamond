@@ -33,6 +33,7 @@ import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.customer.StatusBadge
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.GoldCalc
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
@@ -136,9 +137,9 @@ class HistoryViewModel @Inject constructor(
         invoicePaymentDao.insertPayment(payment)
 
         val rate = settings.value.goldRate24K
-        val goldValue = gold * rate * (karat / 24.0)
+        val goldValue = GoldCalc.goldPaymentValue(gold, karat, rate)
         val totalPaidThisTime = amount + goldValue
-        val newRemaining = invoice.remainingBalance - totalPaidThisTime
+        val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance - totalPaidThisTime)
         
         val updatedInvoice = invoice.copy(
             remainingBalance = newRemaining,
@@ -151,7 +152,62 @@ class HistoryViewModel @Inject constructor(
         customerDao.getCustomerById(invoice.customerId)?.let { customer ->
             customerDao.updateCustomer(customer.copy(
                 cashBalance = newRemaining, 
-                goldBalanceGrams = customer.goldBalanceGrams - (gold * (karat / 24.0)),
+                goldBalanceGrams = customer.goldBalanceGrams - GoldCalc.pureGoldFromKarat(gold, karat),
+                updatedAt = Date()
+            ))
+        }
+    }
+
+    fun updatePayment(invoice: Invoice, payment: InvoicePayment, amount: Double, gold: Double, karat: Int, mode: String) = viewModelScope.launch {
+        val updatedPayment = payment.copy(
+            amount = if (mode == "CASH") amount else 0.0,
+            goldGrams = if (mode == "GOLD") gold else 0.0,
+            goldKarat = karat,
+            paymentMode = mode,
+            date = Date()
+        )
+        invoicePaymentDao.updatePayment(updatedPayment)
+
+        val rate = if (invoice.goldRate24K > 0) invoice.goldRate24K else settings.value.goldRate24K
+        val oldValue = payment.amount + GoldCalc.goldPaymentValue(payment.goldGrams, payment.goldKarat, rate)
+        val newValue = updatedPayment.amount + GoldCalc.goldPaymentValue(updatedPayment.goldGrams, updatedPayment.goldKarat, rate)
+        val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance + oldValue - newValue)
+
+        invoiceDao.updateInvoice(invoice.copy(
+            remainingBalance = newRemaining,
+            cashPaid = invoice.cashPaid - payment.amount + updatedPayment.amount,
+            goldPaidGrams = invoice.goldPaidGrams - payment.goldGrams + updatedPayment.goldGrams,
+            paymentStatus = if (newRemaining <= 0) PaymentStatus.PAID else PaymentStatus.PARTIAL,
+            updatedAt = Date()
+        ))
+
+        customerDao.getCustomerById(invoice.customerId)?.let { customer ->
+            val oldPure = GoldCalc.pureGoldFromKarat(payment.goldGrams, payment.goldKarat)
+            val newPure = GoldCalc.pureGoldFromKarat(updatedPayment.goldGrams, updatedPayment.goldKarat)
+            customerDao.updateCustomer(customer.copy(
+                cashBalance = newRemaining,
+                goldBalanceGrams = customer.goldBalanceGrams + oldPure - newPure,
+                updatedAt = Date()
+            ))
+        }
+    }
+
+    fun deletePayment(invoice: Invoice, payment: InvoicePayment) = viewModelScope.launch {
+        invoicePaymentDao.deletePayment(payment)
+        val rate = if (invoice.goldRate24K > 0) invoice.goldRate24K else settings.value.goldRate24K
+        val removedValue = payment.amount + GoldCalc.goldPaymentValue(payment.goldGrams, payment.goldKarat, rate)
+        val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance + removedValue)
+        invoiceDao.updateInvoice(invoice.copy(
+            remainingBalance = newRemaining,
+            cashPaid = (invoice.cashPaid - payment.amount).coerceAtLeast(0.0),
+            goldPaidGrams = (invoice.goldPaidGrams - payment.goldGrams).coerceAtLeast(0.0),
+            paymentStatus = if (newRemaining <= 0) PaymentStatus.PAID else if (newRemaining < invoice.totalAmount) PaymentStatus.PARTIAL else PaymentStatus.PENDING,
+            updatedAt = Date()
+        ))
+        customerDao.getCustomerById(invoice.customerId)?.let { customer ->
+            customerDao.updateCustomer(customer.copy(
+                cashBalance = newRemaining,
+                goldBalanceGrams = customer.goldBalanceGrams + GoldCalc.pureGoldFromKarat(payment.goldGrams, payment.goldKarat),
                 updatedAt = Date()
             ))
         }
@@ -407,14 +463,20 @@ fun InvoiceDetailScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var invoice by remember { mutableStateOf<Invoice?>(null) }
+    var customer by remember { mutableStateOf<Customer?>(null) }
     val billItems by viewModel.getBillItems(invoiceId).collectAsState(emptyList())
     val payments by viewModel.getPayments(invoiceId).collectAsState(emptyList())
     val sdf = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()) }
     val profile by viewModel.profile.collectAsState()
     var showPaymentDialog by remember { mutableStateOf(false) }
+    var editingPayment by remember { mutableStateOf<InvoicePayment?>(null) }
+    var deletePaymentTarget by remember { mutableStateOf<InvoicePayment?>(null) }
 
     LaunchedEffect(invoiceId) {
-        viewModel.getInvoiceById(invoiceId).collect { invoice = it }
+        viewModel.getInvoiceById(invoiceId).collect {
+            invoice = it
+            customer = it?.let { inv -> viewModel.getCustomer(inv.customerId) }
+        }
     }
 
     fun handleShare() {
@@ -488,6 +550,22 @@ fun InvoiceDetailScreen(
                     }
                 }
 
+                item {
+                    val shopName = inv.customerShopName.ifEmpty { customer?.companyName?.ifEmpty { customer?.name ?: "" } ?: "" }
+                    val ownerName = inv.customerOwnerName.ifEmpty { customer?.name ?: "" }
+                    val address = inv.customerAddress.ifEmpty { customer?.address ?: "" }
+                    val phone = inv.customerPhone.ifEmpty { customer?.phone ?: "" }
+                    GlassCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("SOLD TO", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, letterSpacing = 1.sp)
+                            Text(shopName, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                            Text(ownerName, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                            Text(address, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                            Text(phone, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                        }
+                    }
+                }
+
                 item { Text("ITEMS", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), letterSpacing = 2.sp, modifier = Modifier.padding(vertical = 4.dp)) }
 
                 items(billItems) { item ->
@@ -519,8 +597,16 @@ fun InvoiceDetailScreen(
                                     Text(if (p.paymentMode == "CASH") "Cash Payment" else "Gold Payment (${p.goldKarat}K)", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface)
                                     Text(sdf.format(p.date), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant)
                                 }
-                                Text(if (p.paymentMode == "CASH") "₹${String.format("%,.0f", p.amount)}" else "${String.format("%.3f", p.goldGrams)}g", 
-                                    style = MaterialTheme.typography.titleMedium, color = AuraColors.Primary)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(if (p.paymentMode == "CASH") "₹${String.format("%,.0f", p.amount)}" else "${String.format("%.3f", p.goldGrams)}g",
+                                        style = MaterialTheme.typography.titleMedium, color = AuraColors.Primary)
+                                    IconButton(onClick = { editingPayment = p }) {
+                                        Icon(Icons.Default.Edit, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
+                                    }
+                                    IconButton(onClick = { deletePaymentTarget = p }) {
+                                        Icon(Icons.Default.Delete, null, tint = AuraColors.Error, modifier = Modifier.size(18.dp))
+                                    }
+                                }
                             }
                         }
                     }
@@ -530,13 +616,15 @@ fun InvoiceDetailScreen(
                 item {
                     GlassCard(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PaymentRow("Sub Total", "₹${String.format("%,.2f", inv.subtotal)}")
+                            PaymentRow("Sub Total Grams", "${String.format("%.3f", inv.totalWeightGrams)}g")
+                            PaymentRow("Amount Subtotal", "₹${String.format("%,.2f", inv.subtotal)}")
                             PaymentRow("GST (${inv.gstPercent}%)", "₹${String.format("%,.2f", inv.gstAmount)}")
                             Divider(color = AuraColors.GlassWhite10)
                             PaymentRow("Total", "₹${String.format("%,.2f", inv.totalAmount)}", bold = true, color = AuraColors.OnSurface)
                             Divider(color = AuraColors.GlassWhite5)
                             PaymentRow("Paid till date", "₹${String.format("%,.2f", inv.totalAmount - inv.remainingBalance)}", color = AuraColors.Primary)
                             PaymentRow("Balance Due", "₹${String.format("%,.2f", inv.remainingBalance)}", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
+                            PaymentRow("Balance Gold", "${String.format("%.3f", (inv.remainingBalance.coerceAtLeast(0.0) / inv.goldRate24K.coerceAtLeast(1.0)))}g pure", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
                         }
                     }
                 }
@@ -555,19 +643,48 @@ fun InvoiceDetailScreen(
             }
         )
     }
+
+    if (editingPayment != null && invoice != null) {
+        AddPaymentDialog(
+            invoice = invoice!!,
+            existing = editingPayment,
+            onDismiss = { editingPayment = null },
+            onSave = { amt, gold, karat, mode ->
+                viewModel.updatePayment(invoice!!, editingPayment!!, amt, gold, karat, mode)
+                editingPayment = null
+            }
+        )
+    }
+
+    deletePaymentTarget?.let { payment ->
+        AlertDialog(
+            onDismissRequest = { deletePaymentTarget = null },
+            containerColor = AuraColors.SurfaceContainerHigh,
+            title = { Text("Delete payment?", color = AuraColors.OnSurface) },
+            text = { Text("This will update the invoice balance. Are you sure you want to delete this payment?", color = AuraColors.OnSurfaceVariant) },
+            confirmButton = {
+                GoldButton("Delete", onClick = {
+                    invoice?.let { viewModel.deletePayment(it, payment) }
+                    deletePaymentTarget = null
+                })
+            },
+            dismissButton = { TextButton(onClick = { deletePaymentTarget = null }) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }
+        )
+    }
 }
 
 @Composable
-fun AddPaymentDialog(invoice: Invoice, onDismiss: () -> Unit, onSave: (Double, Double, Int, String) -> Unit) {
-    var mode by remember { mutableStateOf("CASH") }
-    var amount by remember { mutableStateOf("") }
-    var gold by remember { mutableStateOf("") }
-    var karat by remember { mutableIntStateOf(22) }
+fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, onDismiss: () -> Unit, onSave: (Double, Double, Int, String) -> Unit) {
+    var mode by remember { mutableStateOf(existing?.paymentMode ?: "CASH") }
+    var amount by remember { mutableStateOf(existing?.amount?.takeIf { it > 0 }?.toString() ?: "") }
+    var gold by remember { mutableStateOf(existing?.goldGrams?.takeIf { it > 0 }?.toString() ?: "") }
+    var karat by remember { mutableIntStateOf(existing?.goldKarat ?: 22) }
+    var error by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AuraColors.SurfaceContainerHigh,
-        title = { Text("Record Payment", color = AuraColors.OnSurface) },
+        title = { Text(if (existing == null) "Record Payment" else "Edit Payment", color = AuraColors.OnSurface) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -580,16 +697,23 @@ fun AddPaymentDialog(invoice: Invoice, onDismiss: () -> Unit, onSave: (Double, D
                     GhostTextField(gold, { gold = it }, "Gold Weight (grams)", keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Decimal))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Karat:", color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
-                        listOf(24, 22, 18).forEach { k ->
+                        listOf(24, 22, 20, 18).forEach { k ->
                             FilterChip(selected = karat == k, onClick = { karat = k }, label = { Text("${k}K") })
                         }
                     }
                 }
+                if (error.isNotEmpty()) Text(error, color = AuraColors.Error, style = MaterialTheme.typography.bodyMedium)
             }
         },
         confirmButton = {
             GoldButton("Save Payment", onClick = {
-                onSave(amount.toDoubleOrNull() ?: 0.0, gold.toDoubleOrNull() ?: 0.0, karat, mode)
+                val amountValue = amount.toDoubleOrNull()
+                val goldValue = gold.toDoubleOrNull()
+                when {
+                    mode == "CASH" && (amountValue == null || amountValue <= 0.0) -> error = "Enter valid number"
+                    mode == "GOLD" && (goldValue == null || goldValue <= 0.0) -> error = "Enter valid number"
+                    else -> onSave(amountValue ?: 0.0, goldValue ?: 0.0, karat, mode)
+                }
             })
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }

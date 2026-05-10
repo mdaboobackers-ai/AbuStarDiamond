@@ -96,6 +96,7 @@ fun BackupScreen(
     val settings by viewModel.settings.collectAsState()
     val backupState by viewModel.backupState.collectAsState()
     val sdf = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
+    val signedInAccount = GoogleSignIn.getLastSignedInAccount(context)
 
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -232,6 +233,13 @@ fun BackupScreen(
 
                         Spacer(Modifier.height(20.dp))
 
+                        Text(
+                            "Account: ${signedInAccount?.email ?: "Not selected"}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuraColors.OnSurfaceVariant.copy(alpha = 0.75f)
+                        )
+                        Spacer(Modifier.height(12.dp))
+
                         GoldButton(
                             text = if (backupState is BackupState.Running) "Syncing..." else "Sync with Cloud",
                             onClick = {
@@ -319,13 +327,17 @@ fun BackupScreen(
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Select a backup file from your Google Drive to restore your data. This will replace all current data.",
+                            "Restore merges your Google Drive backup into this device. Existing newer local records are kept.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = AuraColors.OnSurfaceVariant.copy(alpha = 0.7f)
                         )
                         Spacer(Modifier.height(16.dp))
                         OutlinedButton(
-                            onClick = { launchGoogleSignIn() },
+                            onClick = {
+                                val account = GoogleSignIn.getLastSignedInAccount(context)
+                                if (account == null) launchGoogleSignIn()
+                                else viewModel.triggerManualSync { launchGoogleSignIn() }
+                            },
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.OnSurface),
                             border = BorderStroke(1.dp, AuraColors.GlassWhite20),

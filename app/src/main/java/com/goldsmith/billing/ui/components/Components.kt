@@ -212,7 +212,7 @@ fun GoldRateCard(karat: String, rate: Double, trend: String, modifier: Modifier 
                 color = AuraColors.OnSurface
             )
             Text(
-                text = "Per 10 Grams",
+                text = "Per Gram",
                 style = MaterialTheme.typography.labelSmall,
                 color = AuraColors.Primary.copy(alpha = 0.6f),
                 modifier = Modifier.padding(top = 2.dp)

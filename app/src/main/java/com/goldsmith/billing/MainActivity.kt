@@ -20,6 +20,7 @@ import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.navigation.GoldsmithNavGraph
 import com.goldsmith.billing.navigation.Screen
 import com.goldsmith.billing.security.KeystoreManager
+import com.goldsmith.billing.ui.splash.AnimatedSplashScreen
 import com.goldsmith.billing.ui.theme.GoldsmithBillingTheme
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -83,6 +84,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val settings by viewModel.settings.collectAsState()
             val locked by viewModel.lockApp.collectAsState()
+            var showSplash by remember { mutableStateOf(true) }
 
             GoldsmithBillingTheme(darkTheme = settings.isDarkTheme) {
                 Surface(
@@ -104,10 +106,14 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    GoldsmithNavGraph(
-                        navController = navController,
-                        startDestination = startDestination
-                    )
+                    if (showSplash) {
+                        AnimatedSplashScreen { showSplash = false }
+                    } else {
+                        GoldsmithNavGraph(
+                            navController = navController,
+                            startDestination = startDestination
+                        )
+                    }
                 }
             }
         }

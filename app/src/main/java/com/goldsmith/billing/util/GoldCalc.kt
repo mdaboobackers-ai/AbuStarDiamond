@@ -5,6 +5,7 @@ import java.util.Locale
 
 object GoldCalc {
     fun rate22K(rate24K: Double) = rate24K * 0.916
+    fun rate20K(rate24K: Double) = rate24K * (20.0 / 24.0)
     fun rate18K(rate24K: Double) = rate24K * 0.75
     fun rate14K(rate24K: Double) = rate24K * 0.585
 
@@ -24,8 +25,11 @@ object GoldCalc {
         else -> "Custom"
     }
 
+    fun netWeight(grossWeight: Double, lessWeight: Double): Double =
+        roundGrams((grossWeight - lessWeight).coerceAtLeast(0.0))
+
     fun fineGold(netWeight: Double, purityPercent: Double): Double =
-        netWeight * (purityPercent / 100.0)
+        roundGrams(netWeight * (purityPercent / 100.0))
 
     fun itemAmount(
         netWeight: Double,
@@ -34,13 +38,46 @@ object GoldCalc {
         makingPerGram: Double,
         stoneValue: Double = 0.0
     ): Double {
-        val goldRate = rate24K * (purityPercent / 100.0)
-        return (netWeight * goldRate) + (netWeight * makingPerGram) + stoneValue
+        return roundMoney((fineGold(netWeight, purityPercent) * rate24K) + (netWeight * makingPerGram) + stoneValue)
     }
 
-    fun equivalent22K(fineGoldGrams: Double): Double = fineGoldGrams / 0.916
+    fun equivalent916(fineGoldGrams: Double): Double = roundGrams(fineGoldGrams / 0.916)
+    fun equivalent22K(fineGoldGrams: Double): Double = equivalent916(fineGoldGrams)
     fun equivalent18K(fineGoldGrams: Double): Double = fineGoldGrams / 0.75
+
+    fun pureGoldFromKarat(goldGrams: Double, karat: Int): Double =
+        roundGrams(goldGrams * (karat.coerceIn(1, 24) / 24.0))
+
+    fun goldPaymentValue(goldGrams: Double, karat: Int, rate24K: Double): Double =
+        roundMoney(pureGoldFromKarat(goldGrams, karat) * rate24K)
+
+    fun remainingBalance(
+        totalAmount: Double,
+        cashPaid: Double,
+        goldPayments: List<Pair<Double, Int>>,
+        rate24K: Double
+    ): GoldBalance {
+        val goldValue = goldPayments.sumOf { (grams, karat) -> goldPaymentValue(grams, karat, rate24K) }
+        val remainingCash = roundMoney(totalAmount - cashPaid - goldValue)
+        val pureGold = if (rate24K > 0) roundGrams(remainingCash.coerceAtLeast(0.0) / rate24K) else 0.0
+        return GoldBalance(cash = remainingCash, pureGoldGrams = pureGold)
+    }
+
+    fun isValidDecimal(value: String, allowZero: Boolean = true): Boolean {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return false
+        val parsed = trimmed.toDoubleOrNull() ?: return false
+        return if (allowZero) parsed >= 0.0 else parsed > 0.0
+    }
+
+    fun roundGrams(value: Double): Double = kotlin.math.round(value * 1000.0) / 1000.0
+    fun roundMoney(value: Double): Double = kotlin.math.round(value * 100.0) / 100.0
 }
+
+data class GoldBalance(
+    val cash: Double,
+    val pureGoldGrams: Double
+)
 
 fun Double.formatGrams(decimals: Int = 3): String = String.format("%.${decimals}f", this)
 

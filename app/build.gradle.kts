@@ -81,6 +81,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.google.material)
+    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
 
@@ -117,6 +118,7 @@ dependencies {
     implementation(libs.google.api.drive.v3)
     implementation(libs.google.api.client.core)
     implementation(libs.google.http.gson)
+    implementation(libs.mlkit.text.recognition)
 
     // Hilt WorkManager
     implementation(libs.hilt.work)

@@ -60,16 +60,6 @@ class DashboardViewModel @Inject constructor(
     private val goldRateService: com.goldsmith.billing.data.remote.GoldRateService
 ) : ViewModel() {
 
-    init {
-        fetchLiveRate()
-    }
-
-    private fun fetchLiveRate() = viewModelScope.launch {
-        goldRateService.fetchLatestGoldRate()?.let { rate ->
-            settingsRepo.updateGoldRates(rate)
-        }
-    }
-
     private val todayStart: Date get() {
         val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
@@ -146,10 +136,11 @@ fun DashboardScreen(
     onCustomers: () -> Unit,
     onSettings: () -> Unit,
     onMelting: () -> Unit,
+    onAnalytics: () -> Unit,
+    onHallmarkScan: () -> Unit,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
-    var showRateDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = AuraColors.Background,
@@ -191,9 +182,7 @@ fun DashboardScreen(
                 // ── Market Pulse ──────────────────────────────────────────────
                 item {
                     SectionHeader(
-                        title = "Market Pulse",
-                        action = "Edit",
-                        onAction = { showRateDialog = true }
+                        title = "Market Pulse"
                     )
                 }
                 item {
@@ -305,18 +294,17 @@ fun DashboardScreen(
                         QuickActionCard("MELTING", Icons.Default.Whatshot, onClick = onMelting, modifier = Modifier.weight(1f))
                     }
                 }
+                item {
+                    QuickActionCard("ANALYTICS", Icons.Default.Analytics, onClick = onAnalytics, modifier = Modifier.fillMaxWidth())
+                }
+                item {
+                    QuickActionCard("HALLMARK OCR", Icons.Default.DocumentScanner, onClick = onHallmarkScan, modifier = Modifier.fillMaxWidth())
+                }
                 item { Spacer(Modifier.height(80.dp)) }
             }
         }
     }
 
-    if (showRateDialog) {
-        GoldRateEditDialog(
-            current24K = state.settings.goldRate24K,
-            onDismiss = { showRateDialog = false },
-            onSave = { r -> viewModel.updateGoldRate(r); showRateDialog = false }
-        )
-    }
 }
 
 @Composable

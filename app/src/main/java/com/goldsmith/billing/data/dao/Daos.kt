@@ -172,6 +172,15 @@ interface InvoicePaymentDao {
     @Query("SELECT * FROM invoice_payments WHERE invoiceId = :invoiceId ORDER BY date DESC")
     fun getPaymentsForInvoice(invoiceId: Long): Flow<List<InvoicePayment>>
 
+    @Query("SELECT * FROM invoice_payments ORDER BY date DESC")
+    fun getAllPayments(): Flow<List<InvoicePayment>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPayment(payment: InvoicePayment): Long
+
+    @Update
+    suspend fun updatePayment(payment: InvoicePayment)
+
+    @Delete
+    suspend fun deletePayment(payment: InvoicePayment)
 }

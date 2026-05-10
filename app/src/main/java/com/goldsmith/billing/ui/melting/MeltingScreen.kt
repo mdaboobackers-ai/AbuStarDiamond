@@ -58,10 +58,14 @@ class MeltingViewModel @Inject constructor(
 
     fun setCustomerQuery(q: String) { _customerQuery.value = q }
 
-    fun saveRecord(record: MeltingRecord, onDone: () -> Unit) = viewModelScope.launch {
+    fun saveRecord(record: MeltingRecord, previous: MeltingRecord? = null, onDone: () -> Unit) = viewModelScope.launch {
         meltingDao.insertMeltingRecord(record)
         customerDao.getCustomerById(record.customerId)?.let { customer ->
-            val newGoldBalance = customer.goldBalanceGrams - record.finalPureWeightGrams
+            val newGoldBalance = if (previous == null) {
+                customer.goldBalanceGrams - record.finalPureWeightGrams
+            } else {
+                customer.goldBalanceGrams + previous.finalPureWeightGrams - record.finalPureWeightGrams
+            }
             customerDao.updateCustomer(customer.copy(goldBalanceGrams = newGoldBalance, updatedAt = Date()))
         }
         onDone()
@@ -87,6 +91,8 @@ fun MeltingScreen(
 ) {
     val records by viewModel.records.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
+    var deleteTarget by remember { mutableStateOf<MeltingRecord?>(null) }
+    var editTarget by remember { mutableStateOf<MeltingRecord?>(null) }
 
     Scaffold(
         containerColor = AuraColors.Background,
@@ -149,7 +155,7 @@ fun MeltingScreen(
                 }
             } else {
                 items(records, key = { it.id }) { record ->
-                    MeltingRecordCard(record = record, onDelete = { viewModel.deleteRecord(record) })
+                    MeltingRecordCard(record = record, onEdit = { editTarget = record }, onDelete = { deleteTarget = record })
                 }
             }
             item { Spacer(Modifier.height(80.dp)) }
@@ -165,10 +171,32 @@ fun MeltingScreen(
             }
         )
     }
+
+    editTarget?.let { target ->
+        AddMeltingDialog(
+            viewModel = viewModel,
+            current = target,
+            onDismiss = { editTarget = null },
+            onSave = { record ->
+                viewModel.saveRecord(record.copy(id = target.id, createdAt = target.createdAt, updatedAt = Date()), target) { editTarget = null }
+            }
+        )
+    }
+
+    deleteTarget?.let { record ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            containerColor = AuraColors.SurfaceContainerHigh,
+            title = { Text("Delete melting record?", color = AuraColors.OnSurface) },
+            text = { Text("This will adjust the customer's gold balance. Are you sure?", color = AuraColors.OnSurfaceVariant) },
+            confirmButton = { GoldButton("Delete", onClick = { viewModel.deleteRecord(record); deleteTarget = null }) },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }
+        )
+    }
 }
 
 @Composable
-fun MeltingRecordCard(record: MeltingRecord, onDelete: () -> Unit) {
+fun MeltingRecordCard(record: MeltingRecord, onEdit: () -> Unit, onDelete: () -> Unit) {
     val sdf = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()) }
     val purityGain = if (record.rawWeightGrams > 0)
         (record.finalPureWeightGrams / record.rawWeightGrams * 100)
@@ -186,8 +214,13 @@ fun MeltingRecordCard(record: MeltingRecord, onDelete: () -> Unit) {
                         Text(sdf.format(record.createdAt), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface.copy(alpha = 0.4f), fontSize = 10.sp)
                     }
                 }
-                IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Delete, null, tint = AuraColors.Error.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                Row {
+                    IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Edit, null, tint = AuraColors.PrimaryContainer.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
+                    }
+                    IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Delete, null, tint = AuraColors.Error.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                    }
                 }
             }
 
@@ -218,14 +251,14 @@ private fun MeltMetric(label: String, value: String) {
 }
 
 @Composable
-private fun AddMeltingDialog(viewModel: MeltingViewModel, onDismiss: () -> Unit, onSave: (MeltingRecord) -> Unit) {
-    var rawWeight by remember { mutableStateOf("") }
-    var finalWeight by remember { mutableStateOf("") }
-    var purity by remember { mutableStateOf("91.6") }
-    var notes by remember { mutableStateOf("") }
+private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord? = null, onDismiss: () -> Unit, onSave: (MeltingRecord) -> Unit) {
+    var rawWeight by remember { mutableStateOf(current?.rawWeightGrams?.toString() ?: "") }
+    var finalWeight by remember { mutableStateOf(current?.finalPureWeightGrams?.toString() ?: "") }
+    var purity by remember { mutableStateOf(current?.purityPercent?.toString() ?: "91.6") }
+    var notes by remember { mutableStateOf(current?.notes ?: "") }
     var customerQuery by remember { mutableStateOf("") }
     var selectedCustomer by remember { mutableStateOf<Customer?>(null) }
-    var attachedImages by remember { mutableStateOf(listOf<String>()) }
+    var attachedImages by remember { mutableStateOf(current?.imageUris ?: listOf<String>()) }
     val suggestions by viewModel.suggestedCustomers.collectAsState()
     var showSourceChooser by remember { mutableStateOf(false) }
 
@@ -242,7 +275,7 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, onDismiss: () -> Unit,
         containerColor = AuraColors.SurfaceContainerHigh,
         title = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Default.Whatshot, null, tint = AuraColors.PrimaryContainer)
-            Text("New Melting Record", color = AuraColors.OnSurface)
+            Text(if (current == null) "New Melting Record" else "Edit Melting Record", color = AuraColors.OnSurface)
         }},
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
@@ -292,8 +325,9 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, onDismiss: () -> Unit,
         },
         confirmButton = { GoldButton("Save Record", onClick = {
             val cust = selectedCustomer
-            if (cust != null && rawWeight.isNotEmpty() && finalWeight.isNotEmpty()) {
-                onSave(MeltingRecord(customerId = cust.id, rawWeightGrams = rawWeight.toDoubleOrNull() ?: 0.0, finalPureWeightGrams = finalWeight.toDoubleOrNull() ?: 0.0, purityPercent = purity.toDoubleOrNull() ?: 91.6, notes = notes, imageUris = attachedImages))
+            val customerId = cust?.id ?: current?.customerId
+            if (customerId != null && rawWeight.isNotEmpty() && finalWeight.isNotEmpty()) {
+                onSave(MeltingRecord(customerId = customerId, rawWeightGrams = rawWeight.toDoubleOrNull() ?: 0.0, finalPureWeightGrams = finalWeight.toDoubleOrNull() ?: 0.0, purityPercent = purity.toDoubleOrNull() ?: 91.6, notes = notes, imageUris = attachedImages, linkedInvoiceId = current?.linkedInvoiceId))
             }
         })},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }

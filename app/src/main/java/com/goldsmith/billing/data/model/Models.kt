@@ -58,6 +58,10 @@ data class Invoice(
     val userPrefix: String = "", // F, Y, B
     val invoiceNumber: String,  // e.g. F-8829-2024
     val customerId: Long,
+    val customerShopName: String = "",
+    val customerOwnerName: String = "",
+    val customerAddress: String = "",
+    val customerPhone: String = "",
     val date: Date = Date(),
     // Totals
     val totalWeightGrams: Double = 0.0,
@@ -172,7 +176,8 @@ data class InvoicePayment(
     val goldKarat: Int = 24,
     val paymentMode: String = "CASH", // CASH, GOLD
     val date: Date = Date(),
-    val notes: String = ""
+    val notes: String = "",
+    val attachmentUris: List<String> = emptyList()
 )
 
 // ─── Company Profile ──────────────────────────────────────────────────────────
