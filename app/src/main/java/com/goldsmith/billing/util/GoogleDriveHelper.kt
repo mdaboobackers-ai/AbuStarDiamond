@@ -14,26 +14,42 @@ import kotlinx.coroutines.withContext
 import java.io.FileOutputStream
 import java.util.Collections
 
+object DriveBackupConfig {
+    const val REMOTE_FILE = "goldsmith_sync_v3.enc"
+    const val LEGACY_REMOTE_FILE = "goldsmith_sync_v2.json"
+    const val SPACE = "appDataFolder"
+    const val PARENT = "appDataFolder"
+    const val SCOPE = DriveScopes.DRIVE_APPDATA
+    const val SERVER_BACKUP_EMAIL = "mdaboobackers19@gmail.com"
+    const val FILE_QUERY = "name = '$REMOTE_FILE' and '$PARENT' in parents and trashed = false"
+
+    fun normalizeEmail(email: String?): String = email?.trim()?.lowercase().orEmpty()
+    fun isServerAccount(email: String?): Boolean = normalizeEmail(email) == SERVER_BACKUP_EMAIL
+}
+
 class GoogleDriveHelper(private val context: Context) {
 
-    private val driveService: Drive? by lazy {
-        val account = GoogleSignIn.getLastSignedInAccount(context) ?: return@lazy null
-        val credential = GoogleAccountCredential.usingOAuth2(context, Collections.singleton(DriveScopes.DRIVE_FILE))
+    fun currentAccountEmail(): String =
+        GoogleSignIn.getLastSignedInAccount(context)?.email.orEmpty()
+
+    private fun driveService(): Drive? {
+        val account = GoogleSignIn.getLastSignedInAccount(context) ?: return null
+        val credential = GoogleAccountCredential.usingOAuth2(context, Collections.singleton(DriveBackupConfig.SCOPE))
         credential.selectedAccount = account.account
         
-        Drive.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
-            .setApplicationName("Goldsmith Billing")
+        return Drive.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
+            .setApplicationName("Abu Star Diamonds")
             .build()
     }
 
     suspend fun uploadFile(localFile: java.io.File, remoteName: String): String? = withContext(Dispatchers.IO) {
-        val service = driveService ?: return@withContext null
+        val service = driveService() ?: return@withContext null
         
         val existingFile = findFile(remoteName)
         
         val metadata = File().apply {
             name = remoteName
-            parents = listOf("root")
+            parents = listOf(DriveBackupConfig.PARENT)
         }
         
         val content = FileContent("application/octet-stream", localFile)
@@ -46,7 +62,7 @@ class GoogleDriveHelper(private val context: Context) {
     }
 
     suspend fun downloadFile(remoteName: String, targetFile: java.io.File): Boolean = withContext(Dispatchers.IO) {
-        val service = driveService ?: return@withContext false
+        val service = driveService() ?: return@withContext false
         val file = findFile(remoteName) ?: return@withContext false
         
         FileOutputStream(targetFile).use { outputStream ->
@@ -56,10 +72,12 @@ class GoogleDriveHelper(private val context: Context) {
     }
 
     private fun findFile(name: String): File? {
-        val service = driveService ?: return null
+        val service = driveService() ?: return null
+        val escapedName = name.replace("'", "\\'")
         val result = service.files().list()
-            .setQ("name = '$name' and trashed = false")
-            .setSpaces("drive")
+            .setQ("name = '$escapedName' and '${DriveBackupConfig.PARENT}' in parents and trashed = false")
+            .setSpaces(DriveBackupConfig.SPACE)
+            .setOrderBy("modifiedTime desc")
             .execute()
         return result.files.firstOrNull()
     }

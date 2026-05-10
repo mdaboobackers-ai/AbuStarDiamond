@@ -23,8 +23,10 @@ import androidx.lifecycle.viewModelScope
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.DriveBackupConfig
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -56,6 +58,14 @@ class BackupViewModel @Inject constructor(
 
     private val syncManager = com.goldsmith.billing.util.DataSyncManager(context)
 
+    fun rememberBackupAccount(email: String) = viewModelScope.launch {
+        if (email.isNotBlank()) settingsRepo.updateSelectedBackupEmail(email)
+    }
+
+    fun showAccountError(message: String) {
+        _backupState.value = BackupState.Error(message)
+    }
+
     fun triggerManualSync(onNeedSignIn: () -> Unit) = triggerCloudOperation("Sync", onNeedSignIn) {
         syncManager.performSync()
     }
@@ -64,11 +74,24 @@ class BackupViewModel @Inject constructor(
         syncManager.performBackup()
     }
 
+    fun triggerServerBackup(onNeedSignIn: () -> Unit) = triggerCloudOperation(
+        operation = "Server Backup",
+        onNeedSignIn = onNeedSignIn,
+        requireServerAccount = true
+    ) {
+        syncManager.performBackup()
+    }
+
     fun triggerRestore(onNeedSignIn: () -> Unit) = triggerCloudOperation("Restore", onNeedSignIn) {
         syncManager.performRestore()
     }
 
-    private fun triggerCloudOperation(operation: String, onNeedSignIn: () -> Unit, action: suspend () -> Boolean) = viewModelScope.launch {
+    private fun triggerCloudOperation(
+        operation: String,
+        onNeedSignIn: () -> Unit,
+        requireServerAccount: Boolean = false,
+        action: suspend () -> Boolean
+    ) = viewModelScope.launch {
         _backupState.value = BackupState.Running(operation)
         try {
             val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context)
@@ -77,11 +100,22 @@ class BackupViewModel @Inject constructor(
                 _backupState.value = BackupState.Idle
                 return@launch
             }
+            val accountEmail = account.email.orEmpty()
+            if (accountEmail.isNotBlank()) settingsRepo.updateSelectedBackupEmail(accountEmail)
+            if (requireServerAccount && !DriveBackupConfig.isServerAccount(accountEmail)) {
+                _backupState.value = BackupState.Error("Select ${DriveBackupConfig.SERVER_BACKUP_EMAIL} for server backup")
+                return@launch
+            }
 
             val success = action()
             if (success) {
                 val now = System.currentTimeMillis()
-                if (operation != "Restore") settingsRepo.updateLastBackupTime(now)
+                if (operation != "Restore") {
+                    settingsRepo.updateLastBackupTime(now)
+                    settingsRepo.updateLastBackupAccountEmail(accountEmail)
+                } else {
+                    settingsRepo.updateLastRestoreAccountEmail(accountEmail)
+                }
                 _backupState.value = BackupState.Success(now, operation)
             } else {
                 _backupState.value = BackupState.Error("$operation failed - check Google Drive access")
@@ -109,27 +143,71 @@ fun BackupScreen(
     val backupState by viewModel.backupState.collectAsState()
     val sdf = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
     val signedInAccount = GoogleSignIn.getLastSignedInAccount(context)
+    val visibleAccount = signedInAccount?.email ?: settings.selectedBackupEmail
     var pendingCloudAction by remember { mutableStateOf("backup") }
+    var selectedBackupCompleted by remember { mutableStateOf(false) }
 
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
+            val accountEmail = runCatching {
+                GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                    .getResult(ApiException::class.java)
+                    .email
+                    .orEmpty()
+            }.getOrDefault("")
+            viewModel.rememberBackupAccount(accountEmail)
             when (pendingCloudAction) {
                 "restore" -> viewModel.triggerRestore {}
                 "sync" -> viewModel.triggerManualSync {}
+                "serverBackup" -> viewModel.triggerServerBackup {}
+                "bothServerBackup" -> viewModel.triggerServerBackup {}
+                "bothPrimaryBackup" -> viewModel.triggerBackup {}
                 else -> viewModel.triggerBackup {}
             }
+        } else {
+            viewModel.showAccountError("Google account selection cancelled")
         }
     }
 
-    fun launchGoogleSignIn() {
+    fun launchGoogleSignIn(forceChooseAccount: Boolean = false) {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
-            .requestScopes(Scope("https://www.googleapis.com/auth/drive.file"))
+            .requestScopes(Scope(DriveBackupConfig.SCOPE))
             .build()
         val client = GoogleSignIn.getClient(context, gso)
-        signInLauncher.launch(client.signInIntent)
+        if (forceChooseAccount) {
+            client.signOut().addOnCompleteListener { signInLauncher.launch(client.signInIntent) }
+        } else {
+            signInLauncher.launch(client.signInIntent)
+        }
+    }
+
+    fun runBackupToBothTargets() {
+        val account = GoogleSignIn.getLastSignedInAccount(context)
+        pendingCloudAction = "bothPrimaryBackup"
+        selectedBackupCompleted = false
+        if (account == null) {
+            launchGoogleSignIn()
+            return
+        }
+        viewModel.triggerBackup { launchGoogleSignIn() }
+    }
+
+    LaunchedEffect(backupState) {
+        val state = backupState
+        if (!selectedBackupCompleted &&
+            pendingCloudAction == "bothPrimaryBackup" &&
+            state is BackupState.Success &&
+            state.operation == "Backup"
+        ) {
+            selectedBackupCompleted = true
+            val account = GoogleSignIn.getLastSignedInAccount(context)
+            if (DriveBackupConfig.isServerAccount(account?.email)) return@LaunchedEffect
+            pendingCloudAction = "bothServerBackup"
+            launchGoogleSignIn(forceChooseAccount = true)
+        }
     }
 
     Scaffold(
@@ -251,19 +329,39 @@ fun BackupScreen(
                         Spacer(Modifier.height(20.dp))
 
                         Text(
-                            "Account: ${signedInAccount?.email ?: "Not selected"}",
+                            "Account: ${visibleAccount.ifBlank { "Not selected" }}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = AuraColors.OnSurfaceVariant.copy(alpha = 0.75f)
                         )
+                        Text(
+                            if (DriveBackupConfig.isServerAccount(visibleAccount))
+                                "Server backup active: ${DriveBackupConfig.SERVER_BACKUP_EMAIL}"
+                            else
+                                "Server backup account: ${DriveBackupConfig.SERVER_BACKUP_EMAIL}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuraColors.OnSurfaceVariant.copy(alpha = 0.55f),
+                            fontSize = 10.sp
+                        )
+                        Text(
+                            "Storage: encrypted hidden Google Drive app backup folder",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuraColors.OnSurfaceVariant.copy(alpha = 0.45f),
+                            fontSize = 10.sp
+                        )
+                        if (settings.lastBackupAccountEmail.isNotBlank()) {
+                            Text(
+                                "Last backup account: ${settings.lastBackupAccountEmail}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AuraColors.OnSurfaceVariant.copy(alpha = 0.45f),
+                                fontSize = 10.sp
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
 
                         GoldButton(
-                            text = if (backupState is BackupState.Running) "Backing up..." else "BACKUP TO DRIVE",
+                            text = if (backupState is BackupState.Running) "Backing up..." else "BACKUP TO BOTH ACCOUNTS",
                             onClick = {
-                                val account = GoogleSignIn.getLastSignedInAccount(context)
-                                pendingCloudAction = "backup"
-                                if (account == null) launchGoogleSignIn()
-                                else viewModel.triggerBackup { launchGoogleSignIn() }
+                                runBackupToBothTargets()
                             },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = backupState !is BackupState.Running,
@@ -286,6 +384,22 @@ fun BackupScreen(
                             Icon(Icons.Default.CloudSync, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("FULL MERGE SYNC", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = {
+                                pendingCloudAction = "serverBackup"
+                                launchGoogleSignIn(forceChooseAccount = true)
+                            },
+                            modifier = Modifier.fillMaxWidth().height(46.dp),
+                            enabled = backupState !is BackupState.Running,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
+                            border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.35f)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.ManageAccounts, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("SELECT SERVER BACKUP ACCOUNT", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
                         }
                     }
                 }
@@ -363,7 +477,7 @@ fun BackupScreen(
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Restore merges your Google Drive backup into this device. Existing newer local records are kept.",
+                            "Restore reads the latest backup from the selected Google account. Select ${DriveBackupConfig.SERVER_BACKUP_EMAIL} to restore the server backup.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = AuraColors.OnSurfaceVariant.copy(alpha = 0.7f)
                         )

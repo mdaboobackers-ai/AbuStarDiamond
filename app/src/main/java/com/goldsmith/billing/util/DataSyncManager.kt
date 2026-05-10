@@ -3,6 +3,7 @@ package com.goldsmith.billing.util
 import android.content.Context
 import com.goldsmith.billing.data.db.GoldsmithDatabase
 import com.goldsmith.billing.data.model.*
+import com.goldsmith.billing.security.KeystoreManager
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
@@ -28,16 +29,16 @@ class DataSyncManager(private val context: Context) {
         .setDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
         .create()
     private val driveHelper = GoogleDriveHelper(context)
+    private val keystoreManager = KeystoreManager(context)
 
     suspend fun performSync(): Boolean = withContext(Dispatchers.IO) {
         try {
             val remoteFile = File(context.cacheDir, "remote_sync.json")
-            val success = driveHelper.downloadFile("goldsmith_sync_v2.json", remoteFile)
+            val success = driveHelper.downloadFile(DriveBackupConfig.REMOTE_FILE, remoteFile) ||
+                driveHelper.downloadFile(DriveBackupConfig.LEGACY_REMOTE_FILE, remoteFile)
             
             if (success) {
-                val remoteJson = remoteFile.readText()
-                val remotePayload = gson.fromJson(remoteJson, SyncPayload::class.java)
-                smartMerge(remotePayload)
+                readPayload(remoteFile)?.let { smartMerge(it) }
             }
             
             // After merge, export current state
@@ -59,9 +60,8 @@ class DataSyncManager(private val context: Context) {
             )
             
             val localFile = File(context.cacheDir, "local_sync.json")
-            localFile.writeText(gson.toJson(payload))
-            driveHelper.uploadFile(localFile, "goldsmith_sync_v2.json")
-            true
+            writeEncryptedPayload(localFile, payload)
+            driveHelper.uploadFile(localFile, DriveBackupConfig.REMOTE_FILE) != null
         } catch (e: Exception) {
             e.printStackTrace()
             false
@@ -71,8 +71,8 @@ class DataSyncManager(private val context: Context) {
     suspend fun performBackup(): Boolean = withContext(Dispatchers.IO) {
         try {
             val localFile = File(context.cacheDir, "local_sync.json")
-            localFile.writeText(gson.toJson(buildPayload()))
-            driveHelper.uploadFile(localFile, "goldsmith_sync_v2.json") != null
+            writeEncryptedPayload(localFile, buildPayload())
+            driveHelper.uploadFile(localFile, DriveBackupConfig.REMOTE_FILE) != null
         } catch (e: Exception) {
             e.printStackTrace()
             false
@@ -82,13 +82,29 @@ class DataSyncManager(private val context: Context) {
     suspend fun performRestore(): Boolean = withContext(Dispatchers.IO) {
         try {
             val remoteFile = File(context.cacheDir, "remote_sync.json")
-            if (!driveHelper.downloadFile("goldsmith_sync_v2.json", remoteFile)) return@withContext false
-            val remotePayload = gson.fromJson(remoteFile.readText(), SyncPayload::class.java)
+            val downloaded = driveHelper.downloadFile(DriveBackupConfig.REMOTE_FILE, remoteFile) ||
+                driveHelper.downloadFile(DriveBackupConfig.LEGACY_REMOTE_FILE, remoteFile)
+            if (!downloaded) return@withContext false
+            val remotePayload = readPayload(remoteFile) ?: return@withContext false
             smartMerge(remotePayload)
             true
         } catch (e: Exception) {
             e.printStackTrace()
             false
+        }
+    }
+
+    private fun writeEncryptedPayload(file: File, payload: SyncPayload) {
+        val jsonBytes = gson.toJson(payload).toByteArray(Charsets.UTF_8)
+        file.writeBytes(keystoreManager.encryptBytes(jsonBytes))
+    }
+
+    private fun readPayload(file: File): SyncPayload? {
+        return try {
+            val decrypted = keystoreManager.decryptBytes(file.readBytes()).toString(Charsets.UTF_8)
+            gson.fromJson(decrypted, SyncPayload::class.java)
+        } catch (_: Exception) {
+            runCatching { gson.fromJson(file.readText(), SyncPayload::class.java) }.getOrNull()
         }
     }
 

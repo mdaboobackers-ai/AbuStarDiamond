@@ -19,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -40,6 +42,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+object MobileSecurityAuth {
+    val allowedAuthenticators: Int =
+        BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+
+    fun isAvailable(canAuthenticateResult: Int): Boolean =
+        canAuthenticateResult == BiometricManager.BIOMETRIC_SUCCESS
+}
 
 // ─── ViewModel ────────────────────────────────────────────────────────────────
 @HiltViewModel
@@ -167,11 +178,10 @@ fun PinVerifyScreen(
     var pin by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf("") }
     var shakeAnim by remember { mutableStateOf(false) }
+    var biometricPromptShown by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (!viewModel.isPinSet) { onFirstTime(); return@LaunchedEffect }
-        // Auto-prompt biometric if enabled
-        if (viewModel.isBiometricEnabled) showBiometric(context, onVerified)
     }
 
     fun onDigit(d: String) {
@@ -195,18 +205,36 @@ fun PinVerifyScreen(
     // Check biometric availability
     val canShowBiometric = remember {
         val bm = BiometricManager.from(context)
-        bm.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL) == BiometricManager.BIOMETRIC_SUCCESS
+        MobileSecurityAuth.isAvailable(bm.canAuthenticate(MobileSecurityAuth.allowedAuthenticators))
+    }
+    val showMobileSecurity = viewModel.isBiometricEnabled && canShowBiometric
+
+    LaunchedEffect(viewModel.isBiometricEnabled, canShowBiometric) {
+        if (viewModel.isPinSet && viewModel.isBiometricEnabled && canShowBiometric && !biometricPromptShown) {
+            biometricPromptShown = true
+            showBiometric(
+                context = context,
+                onSuccess = onVerified,
+                onError = { message -> errorMsg = message }
+            )
+        }
     }
 
     PinScaffold(
-        title = "Enter Secure PIN",
-        subtitle = "Identity verification required",
+        title = "Unlock Abu Star",
+        subtitle = if (showMobileSecurity) "Use mobile security or enter PIN" else "Enter PIN to continue",
         pinLength = pin.length,
         errorMsg = errorMsg,
-        showBiometric = viewModel.isBiometricEnabled && canShowBiometric,
+        showBiometric = showMobileSecurity,
         onDigit = ::onDigit,
         onBack = ::onBack,
-        onBiometric = { showBiometric(context, onVerified) }
+        onBiometric = {
+            showBiometric(
+                context = context,
+                onSuccess = onVerified,
+                onError = { message -> errorMsg = message }
+            )
+        }
     )
 }
 
@@ -222,6 +250,20 @@ private fun PinScaffold(
     onBack: () -> Unit,
     onBiometric: () -> Unit
 ) {
+    val infinite = rememberInfiniteTransition(label = "login_security_anim")
+    val ringRotation by infinite.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(animation = tween(4200, easing = LinearEasing)),
+        label = "ring_rotation"
+    )
+    val pulse by infinite.animateFloat(
+        initialValue = 0.82f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(animation = tween(1600, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
+        label = "security_pulse"
+    )
+
     Box(
         Modifier
             .fillMaxSize()
@@ -243,12 +285,34 @@ private fun PinScaffold(
             verticalArrangement = Arrangement.Center
         ) {
             // Branding
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(bottom = 48.dp)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(bottom = 34.dp)
             ) {
-                Icon(Icons.Default.Diamond, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(24.dp))
+                Box(Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        progress = { 0.68f },
+                        modifier = Modifier.fillMaxSize().rotate(ringRotation),
+                        color = AuraColors.PrimaryContainer,
+                        trackColor = AuraColors.GlassWhite10,
+                        strokeWidth = 2.dp,
+                        strokeCap = StrokeCap.Round
+                    )
+                    Box(
+                        Modifier
+                            .size((54 * pulse).dp)
+                            .background(AuraColors.PrimaryContainer.copy(alpha = 0.12f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (showBiometric) Icons.Default.Fingerprint else Icons.Default.Diamond,
+                            null,
+                            tint = AuraColors.PrimaryContainer,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
+                }
                 Text(
                     "ABU STAR DIAMONDS",
                     style = MaterialTheme.typography.labelSmall,
@@ -313,6 +377,20 @@ private fun PinScaffold(
                         }
                     }
 
+                    if (showBiometric) {
+                        OutlinedButton(
+                            onClick = onBiometric,
+                            modifier = Modifier.fillMaxWidth().height(48.dp),
+                            border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(Icons.Default.Fingerprint, null, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("USE MOBILE SECURITY", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+                        }
+                    }
+
                     // Footer
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = {}) {
@@ -356,7 +434,11 @@ private fun PinScaffold(
     }
 }
 
-private fun showBiometric(context: android.content.Context, onSuccess: () -> Unit) {
+private fun showBiometric(
+    context: android.content.Context,
+    onSuccess: () -> Unit,
+    onError: (String) -> Unit = {}
+) {
     val activity = context as? FragmentActivity ?: return
     val executor = ContextCompat.getMainExecutor(context)
     val biometricPrompt = BiometricPrompt(activity, executor,
@@ -364,13 +446,22 @@ private fun showBiometric(context: android.content.Context, onSuccess: () -> Uni
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 onSuccess()
             }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                if (errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON &&
+                    errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
+                    errorCode != BiometricPrompt.ERROR_CANCELED
+                ) {
+                    onError(errString.toString())
+                }
+            }
         }
     )
     biometricPrompt.authenticate(
         BiometricPrompt.PromptInfo.Builder()
             .setTitle("Verify Identity")
-            .setSubtitle("Use biometric to unlock Abu Star Diamonds")
-            .setNegativeButtonText("Use PIN")
+            .setSubtitle("Use fingerprint, face unlock, screen lock, or device credential")
+            .setAllowedAuthenticators(MobileSecurityAuth.allowedAuthenticators)
             .build()
     )
 }

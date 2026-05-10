@@ -21,7 +21,7 @@ class DailyBackupWorker @AssistedInject constructor(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
             val syncManager = com.goldsmith.billing.util.DataSyncManager(applicationContext)
-            val success = syncManager.performSync()
+            val success = syncManager.performBackup()
             
             if (success) {
                 settingsRepo.updateLastBackupTime(System.currentTimeMillis())

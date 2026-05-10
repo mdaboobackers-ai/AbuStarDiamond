@@ -33,6 +33,9 @@ class SettingsRepository @Inject constructor(
         val INACTIVITY_LOCK_SECS = intPreferencesKey("inactivity_lock_secs")
         val SELECTED_ICON = stringPreferencesKey("selected_app_icon")
         val CUSTOM_ICON_URI = stringPreferencesKey("custom_icon_uri")
+        val SELECTED_BACKUP_EMAIL = stringPreferencesKey("selected_backup_email")
+        val LAST_BACKUP_ACCOUNT_EMAIL = stringPreferencesKey("last_backup_account_email")
+        val LAST_RESTORE_ACCOUNT_EMAIL = stringPreferencesKey("last_restore_account_email")
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data
@@ -52,7 +55,10 @@ class SettingsRepository @Inject constructor(
                 gstPercent = prefs[GST_PERCENT] ?: 3.0,
                 inactivityLockSecs = prefs[INACTIVITY_LOCK_SECS] ?: 30,
                 selectedIcon = prefs[SELECTED_ICON] ?: "default",
-                customIconUri = prefs[CUSTOM_ICON_URI] ?: ""
+                customIconUri = prefs[CUSTOM_ICON_URI] ?: "",
+                selectedBackupEmail = prefs[SELECTED_BACKUP_EMAIL] ?: "",
+                lastBackupAccountEmail = prefs[LAST_BACKUP_ACCOUNT_EMAIL] ?: "",
+                lastRestoreAccountEmail = prefs[LAST_RESTORE_ACCOUNT_EMAIL] ?: ""
             )
         }
 
@@ -122,6 +128,18 @@ class SettingsRepository @Inject constructor(
     suspend fun updateInactivityLockSecs(secs: Int) {
         context.dataStore.edit { it[INACTIVITY_LOCK_SECS] = secs }
     }
+
+    suspend fun updateSelectedBackupEmail(email: String) {
+        context.dataStore.edit { it[SELECTED_BACKUP_EMAIL] = email }
+    }
+
+    suspend fun updateLastBackupAccountEmail(email: String) {
+        context.dataStore.edit { it[LAST_BACKUP_ACCOUNT_EMAIL] = email }
+    }
+
+    suspend fun updateLastRestoreAccountEmail(email: String) {
+        context.dataStore.edit { it[LAST_RESTORE_ACCOUNT_EMAIL] = email }
+    }
 }
 
 data class AppSettings(
@@ -138,5 +156,8 @@ data class AppSettings(
     val gstPercent: Double = 3.0,
     val inactivityLockSecs: Int = 30,
     val selectedIcon: String = "default",
-    val customIconUri: String = ""
+    val customIconUri: String = "",
+    val selectedBackupEmail: String = "",
+    val lastBackupAccountEmail: String = "",
+    val lastRestoreAccountEmail: String = ""
 )
