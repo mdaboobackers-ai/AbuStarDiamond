@@ -52,7 +52,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
@@ -201,7 +200,7 @@ class DataImportViewModel @Inject constructor(
             val cashPaid = first.pick("cash_paid", "cashpaid", "paid", "payment").toDoubleOrNull() ?: 0.0
             val total = GoldCalc.roundMoney(subtotal + (subtotal * gst / 100.0))
             val remaining = GoldCalc.roundMoney(total - cashPaid)
-            val invoiceNo = first.pick("invoice_no", "invoice", "bill_no", "billno").ifBlank { nextInvoiceNumber(settings.userPrefix) }
+            val invoiceNo = first.pick("invoice_no", "invoice", "bill_no", "billno").ifBlank { settingsRepo.nextInvoiceNumber(settings.userPrefix) }
             val invoiceId = invoiceDao.insertInvoice(
                 Invoice(
                     userPrefix = settings.userPrefix,
@@ -230,13 +229,6 @@ class DataImportViewModel @Inject constructor(
             skipped += itemPreview.skipped
         }
         return DataImportState(message = "Billing import completed", imported = imported, skipped = skipped)
-    }
-
-    private suspend fun nextInvoiceNumber(prefixValue: String): String {
-        val counter = settingsRepo.incrementInvoiceCounter()
-        val prefix = prefixValue.ifEmpty { "INV" }
-        val year = Calendar.getInstance().get(Calendar.YEAR)
-        return "$prefix-$counter-$year"
     }
 
     private fun templateBytes(mode: ImportMode): ByteArray =

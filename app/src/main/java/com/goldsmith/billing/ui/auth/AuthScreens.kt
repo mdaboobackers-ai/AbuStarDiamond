@@ -243,8 +243,12 @@ fun PinVerifyScreen(
     }
 
     PinScaffold(
-        title = if (!allowPinEntry) "Mobile Security" else "Enter Secure PIN",
-        subtitle = if (!allowPinEntry) "Confirm with mobile security or phone lock" else "Mobile security failed. Use PIN to continue",
+        title = if (!allowPinEntry) "Mobile Security" else if (showMobileSecurity) "Enter Secure PIN" else "Mobile Security",
+        subtitle = when {
+            !allowPinEntry -> "Confirm with mobile security or phone lock"
+            showMobileSecurity -> "Mobile security failed. Use PIN to continue"
+            else -> "Enter app PIN to unlock your secure vault"
+        },
         pinLength = pin.length,
         errorMsg = errorMsg,
         showBiometric = showMobileSecurity,
@@ -344,6 +348,10 @@ private fun PinScaffold(
                         Text(subtitle.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.6f), textAlign = TextAlign.Center, letterSpacing = 2.sp)
                     }
 
+                    if (showPinEntry && !showBiometric) {
+                        SecurityAnimation(ringRotation = ringRotation, pulse = pulse, size = 120.dp, iconSize = 42.dp)
+                    }
+
                     if (showPinEntry) {
                         PinDots(filledCount = pinLength)
                     }
@@ -354,25 +362,7 @@ private fun PinScaffold(
                     }
 
                     if (!showPinEntry) {
-                        Box(Modifier.size(148.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(
-                                progress = { 0.78f },
-                                modifier = Modifier.fillMaxSize().rotate(-ringRotation),
-                                color = AuraColors.PrimaryContainer.copy(alpha = 0.95f),
-                                trackColor = AuraColors.GlassWhite10,
-                                strokeWidth = 3.dp,
-                                strokeCap = StrokeCap.Round
-                            )
-                            Box(
-                                Modifier
-                                    .size((92 * pulse).dp)
-                                    .background(AuraColors.PrimaryContainer.copy(alpha = 0.14f), CircleShape)
-                                    .border(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.Security, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(50.dp))
-                            }
-                        }
+                        SecurityAnimation(ringRotation = ringRotation, pulse = pulse, size = 148.dp, iconSize = 50.dp)
                         Text(
                             "PIN will appear after 3 failed mobile-security attempts.",
                             style = MaterialTheme.typography.bodyMedium,
@@ -516,4 +506,32 @@ private fun showBiometric(
             .setAllowedAuthenticators(MobileSecurityAuth.loginPromptAuthenticators)
             .build()
     )
+}
+
+@Composable
+private fun SecurityAnimation(
+    ringRotation: Float,
+    pulse: Float,
+    size: Dp,
+    iconSize: Dp
+) {
+    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(
+            progress = { 0.78f },
+            modifier = Modifier.fillMaxSize().rotate(-ringRotation),
+            color = AuraColors.PrimaryContainer.copy(alpha = 0.95f),
+            trackColor = AuraColors.GlassWhite10,
+            strokeWidth = 3.dp,
+            strokeCap = StrokeCap.Round
+        )
+        Box(
+            Modifier
+                .size((size.value * 0.62f * pulse).dp)
+                .background(AuraColors.PrimaryContainer.copy(alpha = 0.14f), CircleShape)
+                .border(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Security, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(iconSize))
+        }
+    }
 }

@@ -22,6 +22,14 @@ class BillingLogicTest {
     }
 
     @Test
+    fun `pure gold calculation does not round customer gold upward`() {
+        val pureGold = GoldCalc.fineGold(54.0, 91.6)
+
+        assertEquals(49.464, pureGold, 0.000001)
+        assertFalse("Gold must not be rounded to 49.500g", pureGold == 49.5)
+    }
+
+    @Test
     fun `item amount uses pure gold plus making and stone value`() {
         val amount = GoldCalc.itemAmount(
             netWeight = 9.0,

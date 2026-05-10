@@ -149,6 +149,12 @@ interface MeltingDao {
     @Query("SELECT * FROM melting_records WHERE linkedInvoiceId = :invoiceId ORDER BY createdAt DESC")
     fun getMeltingRecordsByInvoice(invoiceId: Long): Flow<List<MeltingRecord>>
 
+    @Query("SELECT * FROM melting_records WHERE linkedPaymentId = :paymentId ORDER BY createdAt DESC")
+    suspend fun getMeltingRecordsByPayment(paymentId: Long): List<MeltingRecord>
+
+    @Query("DELETE FROM melting_records WHERE linkedPaymentId = :paymentId")
+    suspend fun deleteMeltingRecordsByPayment(paymentId: Long)
+
     @Query("SELECT * FROM melting_records WHERE id = :id")
     suspend fun getMeltingRecordById(id: Long): MeltingRecord?
 

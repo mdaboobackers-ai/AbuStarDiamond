@@ -176,10 +176,7 @@ class BillingViewModel @Inject constructor(
         val prevBal = if (usePreviousBalance) customer.cashBalance else 0.0
         val remaining = GoldCalc.roundMoney(total - cash - goldPaidVal - prevBal)
 
-        val counter = settingsRepo.incrementInvoiceCounter()
-        val prefix = s.userPrefix.ifEmpty { "INV" }
-        val year = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)
-        val invoiceNum = "${prefix}-${counter}-${year}"
+        val invoiceNum = settingsRepo.nextInvoiceNumber(s.userPrefix)
 
         val invoice = Invoice(
             userPrefix = s.userPrefix,
@@ -240,25 +237,25 @@ class BillingViewModel @Inject constructor(
             ))
         }
         payableGoldPayments.forEach { payment ->
-            invoicePaymentDao.insertPayment(InvoicePayment(
+            val paymentId = invoicePaymentDao.insertPayment(InvoicePayment(
                 invoiceId = invoiceId,
                 goldGrams = payment.gramsValue,
                 goldKarat = payment.karat,
                 paymentMode = "GOLD",
                 notes = "Initial invoice gold payment"
             ))
-        }
-
-        // Sync with melting if gold was paid
-        payableGoldPayments.forEach { payment ->
             val pureEquivalent = payment.pureGold
             meltingDao.insertMeltingRecord(MeltingRecord(
                 customerId = customer.id,
                 rawWeightGrams = payment.gramsValue,
                 finalPureWeightGrams = pureEquivalent,
                 purityPercent = (payment.karat / 24.0) * 100.0,
+                expectedPureWeightGrams = pureEquivalent,
+                expectedPurityPercent = (payment.karat / 24.0) * 100.0,
+                status = MeltingStatus.PENDING.name,
                 notes = "Auto-generated from Invoice #$invoiceNum",
-                linkedInvoiceId = invoiceId
+                linkedInvoiceId = invoiceId,
+                linkedPaymentId = paymentId
             ))
         }
 

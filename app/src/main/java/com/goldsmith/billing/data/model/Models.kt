@@ -141,7 +141,7 @@ data class GoldRate(
         childColumns = ["customerId"],
         onDelete = ForeignKey.RESTRICT
     )],
-    indices = [Index("customerId")]
+    indices = [Index("customerId"), Index("linkedInvoiceId"), Index("linkedPaymentId")]
 )
 @TypeConverters(ListConverter::class)
 data class MeltingRecord(
@@ -150,12 +150,18 @@ data class MeltingRecord(
     val rawWeightGrams: Double,
     val finalPureWeightGrams: Double,
     val purityPercent: Double,
+    val expectedPureWeightGrams: Double = 0.0,
+    val expectedPurityPercent: Double = 0.0,
+    val status: String = MeltingStatus.PENDING.name,
     val imageUris: List<String> = emptyList(),
     val notes: String = "",
     val linkedInvoiceId: Long? = null,
+    val linkedPaymentId: Long? = null,
     val createdAt: Date = Date(),
     val updatedAt: Date = Date()
 )
+
+enum class MeltingStatus { PENDING, TESTED, ADJUSTED }
 
 // ─── Invoice Payment ──────────────────────────────────────────────────────────
 @Entity(

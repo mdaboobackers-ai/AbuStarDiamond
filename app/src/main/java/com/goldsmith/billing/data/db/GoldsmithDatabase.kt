@@ -23,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CompanyProfile::class,
         InvoicePayment::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(DateConverter::class, ListConverter::class)
@@ -62,7 +62,7 @@ abstract class GoldsmithDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
         }
 
@@ -94,6 +94,17 @@ abstract class GoldsmithDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `invoices` ADD COLUMN `customerAddress` TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE `invoices` ADD COLUMN `customerPhone` TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE `invoice_payments` ADD COLUMN `attachmentUris` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `melting_records` ADD COLUMN `expectedPureWeightGrams` REAL NOT NULL DEFAULT 0.0")
+                db.execSQL("ALTER TABLE `melting_records` ADD COLUMN `expectedPurityPercent` REAL NOT NULL DEFAULT 0.0")
+                db.execSQL("ALTER TABLE `melting_records` ADD COLUMN `status` TEXT NOT NULL DEFAULT 'PENDING'")
+                db.execSQL("ALTER TABLE `melting_records` ADD COLUMN `linkedPaymentId` INTEGER")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_melting_records_linkedInvoiceId` ON `melting_records` (`linkedInvoiceId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_melting_records_linkedPaymentId` ON `melting_records` (`linkedPaymentId`)")
             }
         }
     }

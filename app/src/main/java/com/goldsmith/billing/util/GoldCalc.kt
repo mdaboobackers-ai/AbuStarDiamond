@@ -1,5 +1,7 @@
 package com.goldsmith.billing.util
 
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -125,8 +127,11 @@ object GoldCalc {
         return if (allowZero) parsed >= 0.0 else parsed > 0.0
     }
 
-    fun roundGrams(value: Double): Double = kotlin.math.round(value * 1000.0) / 1000.0
-    fun roundMoney(value: Double): Double = kotlin.math.round(value * 100.0) / 100.0
+    fun roundGrams(value: Double): Double =
+        BigDecimal.valueOf(value).setScale(3, RoundingMode.HALF_UP).toDouble()
+
+    fun roundMoney(value: Double): Double =
+        BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).toDouble()
 }
 
 data class GoldBalance(

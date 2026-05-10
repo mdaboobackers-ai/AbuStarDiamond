@@ -34,49 +34,60 @@ object BluetoothPrinter {
 
             val esc = ESCPOS(outputStream)
 
+            esc.initialize()
+
             // Header
             esc.setAlignCenter()
             esc.setBold(true)
             esc.setTextSize(1, 1)
-            esc.printLine(profile?.companyName ?: "ABU STAR DIAMONDS")
+            esc.printLine(center(profile?.companyName?.ifEmpty { null } ?: "ABU STAR DIAMONDS"))
             esc.setBold(false)
             esc.setTextSize(0, 0)
-            if (profile?.ownerName?.isNotEmpty() == true) esc.printLine(profile.ownerName)
-            if (profile?.mobileNumber?.isNotEmpty() == true) esc.printLine("Ph: ${profile.mobileNumber}")
+            if (profile?.ownerName?.isNotEmpty() == true) esc.printLine(center(profile.ownerName))
+            if (profile?.mobileNumber?.isNotEmpty() == true) esc.printLine(center("Ph: ${profile.mobileNumber}"))
             esc.printLine("--------------------------------")
 
             // Invoice Info
             esc.setAlignLeft()
-            esc.printLine("Invoice: #${invoice.invoiceNumber}")
             val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
-            esc.printLine("Date: ${sdf.format(invoice.date)}")
+            esc.printLine(fitLine("Inv ${invoice.invoiceNumber}", sdf.format(invoice.date)))
+            val billTo = invoice.customerShopName.ifEmpty { invoice.customerOwnerName }
+            if (billTo.isNotEmpty()) esc.printLine("To: ${clip(billTo, 28)}")
+            if (invoice.customerPhone.isNotEmpty()) esc.printLine("Ph: ${clip(invoice.customerPhone, 28)}")
             esc.printLine("--------------------------------")
 
             // Items
-            esc.printLine("Item          Qty   Karat   Amt")
+            esc.printLine("ITEM        NET     EQ.G   AMT")
             esc.printLine("--------------------------------")
             billItems.forEach { item ->
-                val desc = item.description.take(12).padEnd(12)
-                val wt = String.format("%.2f", item.grossWeightGrams).padStart(6)
-                val kt = item.karatLabel.take(5).padStart(5)
-                val amt = String.format("%.0f", item.itemAmount).padStart(7)
-                esc.printLine("$desc $wt $kt $amt")
+                val desc = clip(item.description.ifEmpty { "Item" }, 10).padEnd(10)
+                val net = String.format(Locale.US, "%.3f", item.netWeightGrams).padStart(7)
+                val eq = String.format(Locale.US, "%.3f", item.fineGoldGrams).padStart(7)
+                val amt = String.format(Locale.US, "%.0f", item.itemAmount).padStart(6)
+                esc.printLine("$desc$net$eq$amt")
+                esc.printLine(" ${clip(item.karatLabel, 5)} Make:${String.format(Locale.US, "%.2f", item.makingChargePercent)}%")
             }
             esc.printLine("--------------------------------")
 
             // Totals
-            esc.setAlignRight()
-            esc.printLine("Subtotal: ${String.format("%.2f", invoice.subtotal)}")
-            esc.printLine("GST (${invoice.gstPercent}%): ${String.format("%.2f", invoice.gstAmount)}")
+            esc.setAlignLeft()
+            esc.printLine(fitLine("Total Eq.g", String.format(Locale.US, "%.3f", invoice.totalFineGoldGrams)))
+            esc.printLine(fitLine("916 Eq.g", String.format(Locale.US, "%.3f", invoice.total916Grams)))
+            esc.printLine(fitLine("Subtotal", "Rs ${String.format(Locale.US, "%.2f", invoice.subtotal)}"))
+            esc.printLine(fitLine("GST ${String.format(Locale.US, "%.2f", invoice.gstPercent)}%", "Rs ${String.format(Locale.US, "%.2f", invoice.gstAmount)}"))
             esc.setBold(true)
-            esc.printLine("TOTAL: RS ${String.format("%.2f", invoice.totalAmount)}")
+            esc.printLine(fitLine("TOTAL", "Rs ${String.format(Locale.US, "%.2f", invoice.totalAmount)}"))
             esc.setBold(false)
+            if (invoice.cashPaid > 0.0) esc.printLine(fitLine("Cash Paid", "Rs ${String.format(Locale.US, "%.2f", invoice.cashPaid)}"))
+            if (invoice.goldPaidGrams > 0.0) esc.printLine(fitLine("Gold Paid", "${String.format(Locale.US, "%.3f", invoice.goldPaidGrams)}g"))
+            if (invoice.remainingBalance > 0.0) esc.printLine(fitLine("Balance", "Rs ${String.format(Locale.US, "%.2f", invoice.remainingBalance)}"))
             esc.printLine("--------------------------------")
 
             esc.setAlignCenter()
             esc.printLine("Thank you for your business!")
             esc.printLine("Secured by Abu Star")
             esc.printLine("\n\n\n") // Feed paper
+            esc.flush()
 
             true
         } catch (e: Exception) {
@@ -88,10 +99,28 @@ object BluetoothPrinter {
         }
     }
 
+    private fun clip(value: String, max: Int): String =
+        if (value.length <= max) value else value.take(max)
+
+    private fun center(value: String, width: Int = 32): String {
+        val clipped = clip(value, width)
+        val left = ((width - clipped.length) / 2).coerceAtLeast(0)
+        return " ".repeat(left) + clipped
+    }
+
+    private fun fitLine(left: String, right: String, width: Int = 32): String {
+        val cleanLeft = clip(left, width)
+        val cleanRight = clip(right, width)
+        val gap = (width - cleanLeft.length - cleanRight.length).coerceAtLeast(1)
+        return cleanLeft + " ".repeat(gap) + cleanRight
+    }
+
     private class ESCPOS(private val outputStream: OutputStream) {
         fun printLine(text: String) {
             outputStream.write((text + "\n").toByteArray(charset("GBK")))
         }
+
+        fun initialize() { outputStream.write(byteArrayOf(0x1B, 0x40)) }
 
         fun setAlignCenter() { outputStream.write(byteArrayOf(0x1B, 0x61, 0x01)) }
         fun setAlignLeft() { outputStream.write(byteArrayOf(0x1B, 0x61, 0x00)) }
@@ -105,5 +134,7 @@ object BluetoothPrinter {
             val size = ((width and 0x07) shl 4) or (height and 0x07)
             outputStream.write(byteArrayOf(0x1D, 0x21, size.toByte()))
         }
+
+        fun flush() { outputStream.flush() }
     }
 }

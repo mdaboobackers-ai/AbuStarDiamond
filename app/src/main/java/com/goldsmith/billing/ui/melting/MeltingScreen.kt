@@ -25,6 +25,7 @@ import com.goldsmith.billing.data.dao.CustomerDao
 import com.goldsmith.billing.data.dao.InvoiceDao
 import com.goldsmith.billing.data.dao.MeltingDao
 import com.goldsmith.billing.data.model.Customer
+import com.goldsmith.billing.data.model.MeltingStatus
 import com.goldsmith.billing.data.model.MeltingRecord
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
@@ -37,6 +38,12 @@ import java.util.*
 import javax.inject.Inject
 
 // ─── ViewModel ────────────────────────────────────────────────────────────────
+data class MeltingUiRecord(
+    val record: MeltingRecord,
+    val customerName: String,
+    val customerPhone: String
+)
+
 @HiltViewModel
 class MeltingViewModel @Inject constructor(
     private val meltingDao: MeltingDao,
@@ -46,6 +53,21 @@ class MeltingViewModel @Inject constructor(
 
     val records: StateFlow<List<MeltingRecord>> = meltingDao.getAllMeltingRecords()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val uiRecords: StateFlow<List<MeltingUiRecord>> = combine(
+        meltingDao.getAllMeltingRecords(),
+        customerDao.getAllCustomers()
+    ) { records, customers ->
+        val customerMap = customers.associateBy { it.id }
+        records.map { record ->
+            val customer = customerMap[record.customerId]
+            MeltingUiRecord(
+                record = record,
+                customerName = customer?.companyName?.ifEmpty { customer.name } ?: "Customer #${record.customerId}",
+                customerPhone = customer?.phone.orEmpty()
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _customerQuery = MutableStateFlow("")
     val customerQuery = _customerQuery.asStateFlow()
@@ -62,10 +84,22 @@ class MeltingViewModel @Inject constructor(
     fun setCustomerQuery(q: String) { _customerQuery.value = q }
 
     fun saveRecord(record: MeltingRecord, previous: MeltingRecord? = null, onDone: () -> Unit) = viewModelScope.launch {
-        meltingDao.insertMeltingRecord(record)
-        val linkedInvoice = record.linkedInvoiceId?.let { invoiceDao.getInvoiceById(it) }
+        val expectedPure = record.expectedPureWeightGrams.takeIf { it > 0.0 }
+            ?: GoldCalc.fineGold(record.rawWeightGrams, record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent)
+        val normalizedRecord = record.copy(
+            expectedPureWeightGrams = expectedPure,
+            expectedPurityPercent = record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent,
+            status = when {
+                record.status == MeltingStatus.PENDING.name -> MeltingStatus.PENDING.name
+                kotlin.math.abs(record.finalPureWeightGrams - expectedPure) > 0.000001 -> MeltingStatus.ADJUSTED.name
+                else -> MeltingStatus.TESTED.name
+            },
+            updatedAt = Date()
+        )
+        meltingDao.insertMeltingRecord(normalizedRecord)
+        val linkedInvoice = normalizedRecord.linkedInvoiceId?.let { invoiceDao.getInvoiceById(it) }
         val meltingCashDelta = if (previous != null && linkedInvoice != null) {
-            GoldCalc.roundMoney((previous.finalPureWeightGrams - record.finalPureWeightGrams) * linkedInvoice.goldRate24K)
+            GoldCalc.roundMoney((previous.finalPureWeightGrams - normalizedRecord.finalPureWeightGrams) * linkedInvoice.goldRate24K)
         } else {
             0.0
         }
@@ -82,11 +116,11 @@ class MeltingViewModel @Inject constructor(
                 invoice.remainingBalance
             }
         }
-        customerDao.getCustomerById(record.customerId)?.let { customer ->
+        customerDao.getCustomerById(normalizedRecord.customerId)?.let { customer ->
             val newGoldBalance = if (previous == null) {
-                customer.goldBalanceGrams - record.finalPureWeightGrams
+                customer.goldBalanceGrams - normalizedRecord.finalPureWeightGrams
             } else {
-                customer.goldBalanceGrams + previous.finalPureWeightGrams - record.finalPureWeightGrams
+                customer.goldBalanceGrams + previous.finalPureWeightGrams - normalizedRecord.finalPureWeightGrams
             }
             customerDao.updateCustomer(customer.copy(
                 cashBalance = updatedInvoiceRemaining ?: customer.cashBalance,
@@ -115,10 +149,15 @@ fun MeltingScreen(
     onBack: () -> Unit,
     viewModel: MeltingViewModel = hiltViewModel()
 ) {
-    val records by viewModel.records.collectAsState()
+    val records by viewModel.uiRecords.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<MeltingRecord?>(null) }
     var editTarget by remember { mutableStateOf<MeltingRecord?>(null) }
+    var statusFilter by remember { mutableStateOf(MeltingStatus.PENDING.name) }
+    val pendingCount = records.count { it.record.status == MeltingStatus.PENDING.name }
+    val testedCount = records.count { it.record.status == MeltingStatus.TESTED.name }
+    val adjustedCount = records.count { it.record.status == MeltingStatus.ADJUSTED.name }
+    val filteredRecords = records.filter { it.record.status == statusFilter }
 
     Scaffold(
         containerColor = AuraColors.Background,
@@ -157,31 +196,42 @@ fun MeltingScreen(
         ) {
             item {
                 GlassCard(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.size(44.dp).background(AuraColors.PrimaryContainer.copy(alpha = 0.15f), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Whatshot, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(24.dp))
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Box(Modifier.size(44.dp).background(AuraColors.PrimaryContainer.copy(alpha = 0.15f), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.AssignmentTurnedIn, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(24.dp))
+                            }
+                            Column {
+                                Text("Melting Queue Review", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                                Text("Review pending gold, test purity, and approve adjustments", style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                            }
                         }
-                        Column {
-                            Text("Old Jewellery Exchange", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
-                            Text("Record raw gold received & final pure weight", style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            QueueChip("Pending", pendingCount, statusFilter == MeltingStatus.PENDING.name) { statusFilter = MeltingStatus.PENDING.name }
+                            QueueChip("Tested", testedCount, statusFilter == MeltingStatus.TESTED.name) { statusFilter = MeltingStatus.TESTED.name }
+                            QueueChip("Adjusted", adjustedCount, statusFilter == MeltingStatus.ADJUSTED.name) { statusFilter = MeltingStatus.ADJUSTED.name }
                         }
                     }
                 }
             }
 
-            if (records.isEmpty()) {
+            if (filteredRecords.isEmpty()) {
                 item {
                     Box(Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Default.Whatshot, null, tint = AuraColors.OnSurface.copy(alpha = 0.15f), modifier = Modifier.size(64.dp))
                             Spacer(Modifier.height(16.dp))
-                            Text("No melting records yet", color = AuraColors.OnSurface.copy(alpha = 0.4f), style = MaterialTheme.typography.bodyLarge)
+                            Text("No ${statusFilter.lowercase(Locale.getDefault())} melting records", color = AuraColors.OnSurface.copy(alpha = 0.4f), style = MaterialTheme.typography.bodyLarge)
                         }
                     }
                 }
             } else {
-                items(records, key = { it.id }) { record ->
-                    MeltingRecordCard(record = record, onEdit = { editTarget = record }, onDelete = { deleteTarget = record })
+                items(filteredRecords, key = { it.record.id }) { uiRecord ->
+                    MeltingRecordCard(
+                        uiRecord = uiRecord,
+                        onEdit = { editTarget = uiRecord.record },
+                        onDelete = { deleteTarget = uiRecord.record }
+                    )
                 }
             }
             item { Spacer(Modifier.height(80.dp)) }
@@ -222,11 +272,43 @@ fun MeltingScreen(
 }
 
 @Composable
-fun MeltingRecordCard(record: MeltingRecord, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun RowScope.QueueChip(label: String, count: Int, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .height(40.dp)
+            .weight(1f)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) AuraColors.PrimaryContainer.copy(alpha = 0.18f) else AuraColors.GlassWhite5)
+            .border(1.dp, if (selected) AuraColors.PrimaryContainer else AuraColors.GlassBorder, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "$label $count",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) AuraColors.PrimaryContainer else AuraColors.OnSurfaceVariant,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.sp
+        )
+    }
+}
+
+@Composable
+fun MeltingRecordCard(uiRecord: MeltingUiRecord, onEdit: () -> Unit, onDelete: () -> Unit) {
+    val record = uiRecord.record
     val sdf = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()) }
     val purityGain = if (record.rawWeightGrams > 0)
         (record.finalPureWeightGrams / record.rawWeightGrams * 100)
     else 0.0
+    val expectedPure = record.expectedPureWeightGrams.takeIf { it > 0.0 }
+        ?: GoldCalc.fineGold(record.rawWeightGrams, record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent)
+    val expectedPurity = record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent
+    val pureDifference = record.finalPureWeightGrams - expectedPure
+    val statusColor = when (record.status) {
+        MeltingStatus.ADJUSTED.name -> AuraColors.Error
+        MeltingStatus.TESTED.name -> AuraColors.Primary
+        else -> AuraColors.PrimaryContainer
+    }
 
     GlassCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
@@ -236,8 +318,11 @@ fun MeltingRecordCard(record: MeltingRecord, onEdit: () -> Unit, onDelete: () ->
                         Icon(Icons.Default.Whatshot, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(20.dp))
                     }
                     Column {
-                        Text("Melt #${record.id}", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
-                        Text(sdf.format(record.createdAt), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface.copy(alpha = 0.4f), fontSize = 10.sp)
+                        Text(uiRecord.customerName, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                        Text("Melt #${record.id} • ${sdf.format(record.createdAt)}", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface.copy(alpha = 0.4f), fontSize = 10.sp)
+                        if (uiRecord.customerPhone.isNotEmpty()) {
+                            Text(uiRecord.customerPhone, style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant, fontSize = 10.sp)
+                        }
                     }
                 }
                 Row {
@@ -254,10 +339,29 @@ fun MeltingRecordCard(record: MeltingRecord, onEdit: () -> Unit, onDelete: () ->
 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 MeltMetric("Raw Weight", "${String.format("%.3f", record.rawWeightGrams)}g")
-                MeltMetric("Pure Weight", "${String.format("%.3f", record.finalPureWeightGrams)}g")
-                MeltMetric("Purity", "${String.format("%.1f", record.purityPercent)}%")
-                MeltMetric("Yield", "${String.format("%.1f", purityGain)}%")
+                MeltMetric("Expected", "${String.format("%.3f", expectedPure)}g")
+                MeltMetric("Tested", "${String.format("%.3f", record.finalPureWeightGrams)}g")
+                MeltMetric("Status", record.status)
             }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                MeltMetric("Expected Purity", "${String.format("%.2f", expectedPurity)}%")
+                MeltMetric("Updated Purity", "${String.format("%.2f", record.purityPercent)}%")
+                MeltMetric("Yield", "${String.format("%.1f", purityGain)}%")
+                MeltMetric("Difference", "${String.format("%.3f", pureDifference)}g")
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                when {
+                    record.status == MeltingStatus.PENDING.name -> "Pending review: enter tested purity or final pure weight to approve."
+                    pureDifference < -0.000001 -> "Purity check shortage adjusted: ${String.format("%.3f", kotlin.math.abs(pureDifference))}g pure gold"
+                    pureDifference > 0.000001 -> "Purity check excess recorded: ${String.format("%.3f", pureDifference)}g pure gold"
+                    else -> "Tested and matched with expected pure gold."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = statusColor
+            )
 
             if (record.notes.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
@@ -326,9 +430,39 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord
                     }
                 }
 
-                GhostTextField(rawWeight, { rawWeight = it }, "Raw Weight (grams)", keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                GhostTextField(finalWeight, { finalWeight = it }, "Final Pure Weight (grams)", keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                GhostTextField(purity, { purity = it }, "Purity %", keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                GhostTextField(
+                    rawWeight,
+                    {
+                        rawWeight = it
+                        val raw = it.toDoubleOrNull()
+                        val p = purity.toDoubleOrNull()
+                        if (raw != null && p != null) finalWeight = String.format(Locale.US, "%.3f", GoldCalc.fineGold(raw, p))
+                    },
+                    "Raw Weight (grams)",
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                GhostTextField(
+                    finalWeight,
+                    {
+                        finalWeight = it
+                        val raw = rawWeight.toDoubleOrNull()
+                        val final = it.toDoubleOrNull()
+                        if (raw != null && raw > 0.0 && final != null) purity = String.format(Locale.US, "%.4f", (final / raw) * 100.0)
+                    },
+                    "Final Pure Weight (grams)",
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+                GhostTextField(
+                    purity,
+                    {
+                        purity = it
+                        val raw = rawWeight.toDoubleOrNull()
+                        val p = it.toDoubleOrNull()
+                        if (raw != null && p != null) finalWeight = String.format(Locale.US, "%.3f", GoldCalc.fineGold(raw, p))
+                    },
+                    "Purity %",
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
                 GhostTextField(notes, { notes = it }, "Notes (Optional)", singleLine = false)
 
                 Text("Attachments", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant)
@@ -355,8 +489,28 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord
             if (customerId != null && rawWeight.isNotEmpty()) {
                 val raw = rawWeight.toDoubleOrNull() ?: 0.0
                 val testedPurity = purity.toDoubleOrNull() ?: 91.6
-                val testedPureWeight = if (raw > 0.0) GoldCalc.fineGold(raw, testedPurity) else finalWeight.toDoubleOrNull() ?: 0.0
-                onSave(MeltingRecord(customerId = customerId, rawWeightGrams = raw, finalPureWeightGrams = testedPureWeight, purityPercent = testedPurity, notes = notes, imageUris = attachedImages, linkedInvoiceId = current?.linkedInvoiceId))
+                val testedPureWeight = finalWeight.toDoubleOrNull()
+                    ?: if (raw > 0.0) GoldCalc.fineGold(raw, testedPurity) else 0.0
+                val expectedPurity = current?.expectedPurityPercent?.takeIf { it > 0.0 } ?: testedPurity
+                val expectedPure = current?.expectedPureWeightGrams?.takeIf { it > 0.0 } ?: GoldCalc.fineGold(raw, expectedPurity)
+                val reviewedStatus = if (kotlin.math.abs(testedPureWeight - expectedPure) > 0.000001) {
+                    MeltingStatus.ADJUSTED.name
+                } else {
+                    MeltingStatus.TESTED.name
+                }
+                onSave(MeltingRecord(
+                    customerId = customerId,
+                    rawWeightGrams = raw,
+                    finalPureWeightGrams = testedPureWeight,
+                    purityPercent = testedPurity,
+                    expectedPureWeightGrams = expectedPure,
+                    expectedPurityPercent = expectedPurity,
+                    status = reviewedStatus,
+                    notes = notes,
+                    imageUris = attachedImages,
+                    linkedInvoiceId = current?.linkedInvoiceId,
+                    linkedPaymentId = current?.linkedPaymentId
+                ))
             }
         })},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }

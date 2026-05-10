@@ -1,6 +1,7 @@
 package com.goldsmith.billing.data.repository
 
 import android.content.Context
+import android.provider.Settings
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
@@ -9,6 +10,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,6 +40,7 @@ class SettingsRepository @Inject constructor(
         val SELECTED_BACKUP_EMAIL = stringPreferencesKey("selected_backup_email")
         val LAST_BACKUP_ACCOUNT_EMAIL = stringPreferencesKey("last_backup_account_email")
         val LAST_RESTORE_ACCOUNT_EMAIL = stringPreferencesKey("last_restore_account_email")
+        val INVOICE_DEVICE_CODE = stringPreferencesKey("invoice_device_code")
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data
@@ -111,6 +116,36 @@ class SettingsRepository @Inject constructor(
             prefs[INVOICE_COUNTER] = next
         }
         return next
+    }
+
+    suspend fun nextInvoiceNumber(prefixValue: String, date: Date = Date()): String {
+        val counter = incrementInvoiceCounter()
+        val prefix = prefixValue.trim().uppercase(Locale.US)
+        val datePart = SimpleDateFormat("yyMMdd", Locale.US).format(date)
+        val sequence = counter.toString().padStart(6, '0')
+        return if (prefix.isEmpty()) {
+            "INV-$datePart-$sequence"
+        } else {
+            val deviceCode = getOrCreateInvoiceDeviceCode()
+            "$prefix-$datePart-$deviceCode-$sequence"
+        }
+    }
+
+    private suspend fun getOrCreateInvoiceDeviceCode(): String {
+        var code = ""
+        context.dataStore.edit { prefs ->
+            code = prefs[INVOICE_DEVICE_CODE].orEmpty()
+            if (code.isEmpty()) {
+                val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID).orEmpty()
+                val seed = "$androidId-${System.currentTimeMillis()}"
+                code = Integer.toUnsignedString(seed.hashCode(), 36)
+                    .uppercase(Locale.US)
+                    .takeLast(4)
+                    .padStart(4, '0')
+                prefs[INVOICE_DEVICE_CODE] = code
+            }
+        }
+        return code
     }
 
     suspend fun updateSelectedIcon(icon: String) {

@@ -17,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
@@ -29,13 +28,11 @@ import androidx.lifecycle.viewModelScope
 import com.goldsmith.billing.R
 import com.goldsmith.billing.data.dao.*
 import com.goldsmith.billing.data.model.CompanyProfile
-import com.goldsmith.billing.data.model.PaymentStatus
 import com.goldsmith.billing.data.remote.MarketRateSnapshot
 import com.goldsmith.billing.data.repository.AppSettings
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
-import com.goldsmith.billing.util.GoldCalc
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -53,13 +50,7 @@ data class DashboardUiState(
     val totalCustomers: Int = 0,
     val upcomingEvents: List<CustomerEvent> = emptyList(),
     val companyProfile: CompanyProfile? = null,
-    val marketRate: MarketRateSnapshot = MarketRateSnapshot(rate24K = 7245.0),
-    val settlementCustomerCount: Int = 0,
-    val settlementGoldDue: Double = 0.0,
-    val settlementCashDueToday: Double = 0.0,
-    val meltingPendingCount: Int = 0,
-    val meltingTestedCount: Int = 0,
-    val meltingAdjustedCount: Int = 0
+    val marketRate: MarketRateSnapshot = MarketRateSnapshot(rate24K = 7245.0)
 )
 
 data class CustomerEvent(val customer: com.goldsmith.billing.data.model.Customer, val type: String, val date: Date)
@@ -70,7 +61,6 @@ class DashboardViewModel @Inject constructor(
     private val invoiceDao: InvoiceDao,
     private val customerDao: CustomerDao,
     private val companyProfileDao: CompanyProfileDao,
-    private val meltingDao: MeltingDao,
     private val goldRateService: com.goldsmith.billing.data.remote.GoldRateService
 ) : ViewModel() {
 
@@ -103,34 +93,10 @@ class DashboardViewModel @Inject constructor(
         customerDao.getCustomerCount(),
         customerDao.getAllCustomers(),
         companyProfileDao.getProfile(),
-        invoiceDao.getAllInvoices(),
-        meltingDao.getAllMeltingRecords(),
         marketRate
     ) { values ->
         val allCustomers = values[7] as List<com.goldsmith.billing.data.model.Customer>
         val settings = values[0] as AppSettings
-        val allInvoices = values[9] as List<com.goldsmith.billing.data.model.Invoice>
-        val meltingRecords = values[10] as List<com.goldsmith.billing.data.model.MeltingRecord>
-        val pendingInvoices = allInvoices.filter { it.paymentStatus != PaymentStatus.PAID && it.remainingBalance > 0.005 }
-        val pendingCustomerIds = pendingInvoices.map { it.customerId }.toSet()
-        val settlementGoldDue = pendingInvoices.sumOf { invoice ->
-            GoldCalc.pendingPureGold(
-                invoice.remainingBalance,
-                invoice.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K
-            ).coerceAtLeast(0.0)
-        }
-        val settlementCashDueToday = pendingInvoices.sumOf { invoice ->
-            GoldCalc.pendingCashAtRate(
-                invoice.remainingBalance,
-                invoice.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K,
-                settings.goldRate24K
-            ).coerceAtLeast(0.0)
-        }
-        val pendingMelting = meltingRecords.count { it.notes.contains("Auto-generated", ignoreCase = true) }
-        val adjustedMelting = meltingRecords.count {
-            kotlin.math.abs(it.rawWeightGrams - it.finalPureWeightGrams) > 0.005 &&
-                !it.notes.contains("Auto-generated", ignoreCase = true)
-        }
         DashboardUiState(
             settings = settings,
             todayInvoiceCount = (values[1] as Int),
@@ -141,13 +107,7 @@ class DashboardViewModel @Inject constructor(
             totalCustomers = (values[6] as Int),
             upcomingEvents = calculateUpcomingEvents(allCustomers),
             companyProfile = values[8] as CompanyProfile?,
-            marketRate = values[11] as MarketRateSnapshot,
-            settlementCustomerCount = pendingCustomerIds.size,
-            settlementGoldDue = settlementGoldDue,
-            settlementCashDueToday = settlementCashDueToday,
-            meltingPendingCount = pendingMelting,
-            meltingTestedCount = (meltingRecords.size - pendingMelting).coerceAtLeast(0),
-            meltingAdjustedCount = adjustedMelting
+            marketRate = values[9] as MarketRateSnapshot
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardUiState())
 
@@ -361,34 +321,6 @@ fun DashboardScreen(
                     }
                 }
 
-                item { SectionHeader(stringResource(R.string.erp_control_center)) }
-                item {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        ErpControlCard(
-                            title = stringResource(R.string.settlement_center),
-                            icon = Icons.Default.AccountBalanceWallet,
-                            primaryValue = "${state.settlementCustomerCount}",
-                            primaryLabel = stringResource(R.string.pending_customers),
-                            secondaryValue = "₹${String.format("%,.0f", state.settlementCashDueToday)}",
-                            secondaryLabel = stringResource(R.string.today_rate_value),
-                            footer = "${String.format("%.3f", state.settlementGoldDue)}g ${stringResource(R.string.pure_gold_due)}",
-                            alert = state.settlementCustomerCount > 0,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ErpControlCard(
-                            title = stringResource(R.string.melting_queue),
-                            icon = Icons.Default.Whatshot,
-                            primaryValue = "${state.meltingPendingCount}",
-                            primaryLabel = stringResource(R.string.pending_test),
-                            secondaryValue = "${state.meltingTestedCount}",
-                            secondaryLabel = stringResource(R.string.tested),
-                            footer = "${state.meltingAdjustedCount} ${stringResource(R.string.adjusted)}",
-                            alert = state.meltingPendingCount > 0,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
                 item { SectionHeader(stringResource(R.string.operations)) }
                 item {
                     Button(
@@ -435,64 +367,6 @@ private fun SummaryMetric(label: String, value: String, isGold: Boolean) {
         Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), fontSize = 9.sp)
         Spacer(Modifier.height(4.dp))
         Text(value, style = MaterialTheme.typography.titleLarge, color = if (isGold) AuraColors.PrimaryContainer else AuraColors.OnSurface, fontSize = 20.sp)
-    }
-}
-
-@Composable
-private fun ErpControlCard(
-    title: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    primaryValue: String,
-    primaryLabel: String,
-    secondaryValue: String,
-    secondaryLabel: String,
-    footer: String,
-    alert: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier
-            .height(156.dp)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        if (alert) AuraColors.PrimaryContainer.copy(alpha = 0.14f) else AuraColors.GlassWhite10,
-                        AuraColors.GlassWhite5
-                    )
-                ),
-                RoundedCornerShape(18.dp)
-            )
-            .border(
-                1.dp,
-                if (alert) AuraColors.PrimaryContainer.copy(alpha = 0.45f) else AuraColors.GlassBorder,
-                RoundedCornerShape(18.dp)
-            )
-            .padding(14.dp)
-    ) {
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    Modifier
-                        .size(32.dp)
-                        .background(AuraColors.SurfaceContainerLowest.copy(alpha = 0.45f), RoundedCornerShape(10.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(icon, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
-                }
-                Text(title.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface, fontSize = 9.sp, letterSpacing = 1.sp)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
-                Column {
-                    Text(primaryValue, style = MaterialTheme.typography.headlineMedium, color = if (alert) AuraColors.PrimaryContainer else AuraColors.OnSurface)
-                    Text(primaryLabel.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.55f), fontSize = 8.sp)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(secondaryValue, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
-                    Text(secondaryLabel.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.55f), fontSize = 8.sp)
-                }
-            }
-            Text(footer, style = MaterialTheme.typography.bodyMedium, color = if (alert) AuraColors.PrimaryContainer else AuraColors.OnSurfaceVariant, fontWeight = FontWeight.Medium)
-        }
     }
 }
 
