@@ -36,6 +36,7 @@ import com.goldsmith.billing.data.dao.CustomerDao
 import com.goldsmith.billing.data.dao.InvoiceDao
 import com.goldsmith.billing.data.dao.CompanyProfileDao
 import com.goldsmith.billing.data.dao.InvoicePaymentDao
+import com.goldsmith.billing.data.dao.MeltingDao
 import com.goldsmith.billing.data.model.*
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
@@ -58,6 +59,7 @@ class HistoryViewModel @Inject constructor(
     private val billItemDao: BillItemDao,
     private val companyProfileDao: CompanyProfileDao,
     private val invoicePaymentDao: InvoicePaymentDao,
+    private val meltingDao: MeltingDao,
     val settingsRepo: SettingsRepository
 ) : ViewModel() {
 
@@ -123,6 +125,9 @@ class HistoryViewModel @Inject constructor(
     fun getPayments(invoiceId: Long): Flow<List<InvoicePayment>> =
         invoicePaymentDao.getPaymentsForInvoice(invoiceId)
 
+    fun getMeltingRecords(invoiceId: Long): Flow<List<MeltingRecord>> =
+        meltingDao.getMeltingRecordsByInvoice(invoiceId)
+
     @SuppressLint("MissingPermission")
     fun bondedPrinters(context: android.content.Context): List<BluetoothDevice> {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
@@ -156,10 +161,17 @@ class HistoryViewModel @Inject constructor(
         )
         invoicePaymentDao.insertPayment(payment)
 
-        val rate = settings.value.goldRate24K
-        val goldValue = GoldCalc.goldPaymentValue(gold, karat, rate)
-        val totalPaidThisTime = amount + goldValue
-        val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance - totalPaidThisTime)
+        val currentRate = settings.value.goldRate24K
+        val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate
+        val newRemaining = GoldCalc.invoiceBalanceAfterPaymentAtCurrentRate(
+            invoiceRemainingBalance = invoice.remainingBalance,
+            invoiceRate24K = invoiceRate,
+            currentRate24K = currentRate,
+            cashPaid = amount,
+            goldGrams = gold,
+            goldKarat = karat
+        )
+        val currentCashDue = GoldCalc.pendingCashAtRate(newRemaining, invoiceRate, currentRate)
         
         val updatedInvoice = invoice.copy(
             remainingBalance = newRemaining,
@@ -171,9 +183,19 @@ class HistoryViewModel @Inject constructor(
 
         customerDao.getCustomerById(invoice.customerId)?.let { customer ->
             customerDao.updateCustomer(customer.copy(
-                cashBalance = newRemaining, 
+                cashBalance = currentCashDue,
                 goldBalanceGrams = customer.goldBalanceGrams - GoldCalc.pureGoldFromKarat(gold, karat),
                 updatedAt = Date()
+            ))
+        }
+        if (mode == "GOLD" && gold > 0.0) {
+            meltingDao.insertMeltingRecord(MeltingRecord(
+                customerId = invoice.customerId,
+                rawWeightGrams = gold,
+                finalPureWeightGrams = GoldCalc.pureGoldFromKarat(gold, karat),
+                purityPercent = (karat / 24.0) * 100.0,
+                notes = "Auto-generated from payment for Invoice #${invoice.invoiceNumber}",
+                linkedInvoiceId = invoice.id
             ))
         }
     }
@@ -189,10 +211,25 @@ class HistoryViewModel @Inject constructor(
         )
         invoicePaymentDao.updatePayment(updatedPayment)
 
-        val rate = if (invoice.goldRate24K > 0) invoice.goldRate24K else settings.value.goldRate24K
-        val oldValue = payment.amount + GoldCalc.goldPaymentValue(payment.goldGrams, payment.goldKarat, rate)
-        val newValue = updatedPayment.amount + GoldCalc.goldPaymentValue(updatedPayment.goldGrams, updatedPayment.goldKarat, rate)
-        val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance + oldValue - newValue)
+        val currentRate = settings.value.goldRate24K
+        val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate
+        val restoredRemaining = GoldCalc.invoiceBalanceAfterReversingPaymentAtCurrentRate(
+            invoiceRemainingBalance = invoice.remainingBalance,
+            invoiceRate24K = invoiceRate,
+            currentRate24K = currentRate,
+            cashPaid = payment.amount,
+            goldGrams = payment.goldGrams,
+            goldKarat = payment.goldKarat
+        )
+        val newRemaining = GoldCalc.invoiceBalanceAfterPaymentAtCurrentRate(
+            invoiceRemainingBalance = restoredRemaining,
+            invoiceRate24K = invoiceRate,
+            currentRate24K = currentRate,
+            cashPaid = updatedPayment.amount,
+            goldGrams = updatedPayment.goldGrams,
+            goldKarat = updatedPayment.goldKarat
+        )
+        val currentCashDue = GoldCalc.pendingCashAtRate(newRemaining, invoiceRate, currentRate)
 
         invoiceDao.updateInvoice(invoice.copy(
             remainingBalance = newRemaining,
@@ -206,7 +243,7 @@ class HistoryViewModel @Inject constructor(
             val oldPure = GoldCalc.pureGoldFromKarat(payment.goldGrams, payment.goldKarat)
             val newPure = GoldCalc.pureGoldFromKarat(updatedPayment.goldGrams, updatedPayment.goldKarat)
             customerDao.updateCustomer(customer.copy(
-                cashBalance = newRemaining,
+                cashBalance = currentCashDue,
                 goldBalanceGrams = customer.goldBalanceGrams + oldPure - newPure,
                 updatedAt = Date()
             ))
@@ -219,9 +256,17 @@ class HistoryViewModel @Inject constructor(
 
     fun deletePayment(invoice: Invoice, payment: InvoicePayment) = viewModelScope.launch {
         invoicePaymentDao.deletePayment(payment)
-        val rate = if (invoice.goldRate24K > 0) invoice.goldRate24K else settings.value.goldRate24K
-        val removedValue = payment.amount + GoldCalc.goldPaymentValue(payment.goldGrams, payment.goldKarat, rate)
-        val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance + removedValue)
+        val currentRate = settings.value.goldRate24K
+        val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate
+        val newRemaining = GoldCalc.invoiceBalanceAfterReversingPaymentAtCurrentRate(
+            invoiceRemainingBalance = invoice.remainingBalance,
+            invoiceRate24K = invoiceRate,
+            currentRate24K = currentRate,
+            cashPaid = payment.amount,
+            goldGrams = payment.goldGrams,
+            goldKarat = payment.goldKarat
+        )
+        val currentCashDue = GoldCalc.pendingCashAtRate(newRemaining, invoiceRate, currentRate)
         invoiceDao.updateInvoice(invoice.copy(
             remainingBalance = newRemaining,
             cashPaid = (invoice.cashPaid - payment.amount).coerceAtLeast(0.0),
@@ -231,7 +276,7 @@ class HistoryViewModel @Inject constructor(
         ))
         customerDao.getCustomerById(invoice.customerId)?.let { customer ->
             customerDao.updateCustomer(customer.copy(
-                cashBalance = newRemaining,
+                cashBalance = currentCashDue,
                 goldBalanceGrams = customer.goldBalanceGrams + GoldCalc.pureGoldFromKarat(payment.goldGrams, payment.goldKarat),
                 updatedAt = Date()
             ))
@@ -491,6 +536,8 @@ fun InvoiceDetailScreen(
     var customer by remember { mutableStateOf<Customer?>(null) }
     val billItems by viewModel.getBillItems(invoiceId).collectAsState(emptyList())
     val payments by viewModel.getPayments(invoiceId).collectAsState(emptyList())
+    val meltingRecords by viewModel.getMeltingRecords(invoiceId).collectAsState(emptyList())
+    val settings by viewModel.settings.collectAsState()
     val sdf = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()) }
     val profile by viewModel.profile.collectAsState()
     var showPaymentDialog by remember { mutableStateOf(false) }
@@ -519,7 +566,7 @@ fun InvoiceDetailScreen(
         val inv = invoice ?: return
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val customer = viewModel.getCustomer(inv.customerId) ?: return@launch
-            val uri = com.goldsmith.billing.util.PdfGenerator.generateInvoicePdf(context, inv, customer, billItems, profile)
+            val uri = com.goldsmith.billing.util.PdfGenerator.generateInvoicePdf(context, inv, customer, billItems, profile, meltingRecords, settings.goldRate24K)
             if (uri != null) {
                 com.goldsmith.billing.util.PdfGenerator.shareViaWhatsApp(context, uri, customer.phone)
             }
@@ -530,7 +577,7 @@ fun InvoiceDetailScreen(
         val inv = invoice ?: return
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             val customer = viewModel.getCustomer(inv.customerId) ?: return@launch
-            val uri = com.goldsmith.billing.util.PdfGenerator.generateInvoicePdf(context, inv, customer, billItems, profile)
+            val uri = com.goldsmith.billing.util.PdfGenerator.generateInvoicePdf(context, inv, customer, billItems, profile, meltingRecords, settings.goldRate24K)
             if (uri != null) {
                 val intent = Intent(Intent.ACTION_VIEW).apply {
                     setDataAndType(uri, "application/pdf")
@@ -577,6 +624,9 @@ fun InvoiceDetailScreen(
         }
     ) { padding ->
         invoice?.let { inv ->
+            val invoiceRate = inv.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K
+            val balanceGold = GoldCalc.pendingPureGold(inv.remainingBalance, invoiceRate).coerceAtLeast(0.0)
+            val balanceTodayCash = GoldCalc.pendingCashAtRate(inv.remainingBalance, invoiceRate, settings.goldRate24K)
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     printMessage?.let {
@@ -633,7 +683,7 @@ fun InvoiceDetailScreen(
                             Spacer(Modifier.height(8.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 InvoiceMetric("Purity", item.karatLabel)
-                                InvoiceMetric("Making/g", "₹${String.format("%.2f", item.makingChargePerGram)}")
+                                InvoiceMetric("Making %", "${String.format("%.2f", item.makingChargePercent.takeIf { it > 0.0 } ?: item.makingChargePerGram)}%")
                                 InvoiceMetric("Amount", "₹${String.format("%,.2f", item.itemAmount)}")
                             }
                         }
@@ -692,6 +742,30 @@ fun InvoiceDetailScreen(
                     }
                 }
 
+                if (meltingRecords.isNotEmpty()) {
+                    item { Text("MELTING / PURITY CHECK", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), letterSpacing = 2.sp, modifier = Modifier.padding(vertical = 4.dp)) }
+                    items(meltingRecords) { record ->
+                        val difference = GoldCalc.roundGrams(record.rawWeightGrams - record.finalPureWeightGrams)
+                        GlassCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Purity check adjustment", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    InvoiceMetric("Raw received", "${String.format("%.3f", record.rawWeightGrams)}g")
+                                    InvoiceMetric("Tested purity", "${String.format("%.2f", record.purityPercent)}%")
+                                    InvoiceMetric("Pure received", "${String.format("%.3f", record.finalPureWeightGrams)}g")
+                                }
+                                if (difference > 0.0) {
+                                    Text(
+                                        "Shortage adjusted: ${String.format("%.3f", difference)}g pure gold",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = AuraColors.Error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 item { Text("SUMMARY", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), letterSpacing = 2.sp, modifier = Modifier.padding(vertical = 4.dp)) }
                 item {
                     GlassCard(Modifier.fillMaxWidth()) {
@@ -702,9 +776,9 @@ fun InvoiceDetailScreen(
                             Divider(color = AuraColors.GlassWhite10)
                             PaymentRow("Total", "₹${String.format("%,.2f", inv.totalAmount)}", bold = true, color = AuraColors.OnSurface)
                             Divider(color = AuraColors.GlassWhite5)
-                            PaymentRow("Paid till date", "₹${String.format("%,.2f", inv.totalAmount - inv.remainingBalance)}", color = AuraColors.Primary)
-                            PaymentRow("Balance Due", "₹${String.format("%,.2f", inv.remainingBalance)}", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
-                            PaymentRow("Balance Gold", "${String.format("%.3f", (inv.remainingBalance.coerceAtLeast(0.0) / inv.goldRate24K.coerceAtLeast(1.0)))}g pure", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
+                            PaymentRow("Balance Due Today", "₹${String.format("%,.2f", balanceTodayCash)}", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
+                            PaymentRow("Balance Gold", "${String.format("%.3f", balanceGold)}g pure", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
+                            PaymentRow("Invoice Rate Balance", "₹${String.format("%,.2f", inv.remainingBalance)}", color = AuraColors.OnSurfaceVariant)
                         }
                     }
                 }
@@ -716,6 +790,7 @@ fun InvoiceDetailScreen(
     if (showPaymentDialog && invoice != null) {
         AddPaymentDialog(
             invoice = invoice!!,
+            currentRate24K = settings.goldRate24K,
             onDismiss = { showPaymentDialog = false },
             onSave = { amt, gold, karat, mode, attachments ->
                 viewModel.addPayment(invoice!!, amt, gold, karat, mode, attachments)
@@ -728,6 +803,7 @@ fun InvoiceDetailScreen(
         AddPaymentDialog(
             invoice = invoice!!,
             existing = editingPayment,
+            currentRate24K = settings.goldRate24K,
             onDismiss = { editingPayment = null },
             onSave = { amt, gold, karat, mode, attachments ->
                 viewModel.updatePayment(invoice!!, editingPayment!!, amt, gold, karat, mode, attachments)
@@ -793,7 +869,7 @@ fun InvoiceDetailScreen(
 }
 
 @Composable
-fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, onDismiss: () -> Unit, onSave: (Double, Double, Int, String, List<String>) -> Unit) {
+fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, currentRate24K: Double, onDismiss: () -> Unit, onSave: (Double, Double, Int, String, List<String>) -> Unit) {
     var mode by remember { mutableStateOf(existing?.paymentMode ?: "CASH") }
     var amount by remember { mutableStateOf(existing?.amount?.takeIf { it > 0 }?.toString() ?: "") }
     var gold by remember { mutableStateOf(existing?.goldGrams?.takeIf { it > 0 }?.toString() ?: "") }
@@ -810,6 +886,15 @@ fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, onDismi
         title = { Text(if (existing == null) "Record Payment" else "Edit Payment", color = AuraColors.OnSurface) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
+                val balanceGold = GoldCalc.pendingPureGold(invoice.remainingBalance, invoiceRate).coerceAtLeast(0.0)
+                val balanceCashToday = GoldCalc.pendingCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
+                Text(
+                    "Pending: ${String.format("%.3f", balanceGold)}g pure = ₹${String.format("%,.2f", balanceCashToday)} at today's rate",
+                    color = AuraColors.PrimaryContainer,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = mode == "CASH", onClick = { mode = "CASH" }, label = { Text("Cash") })
                     FilterChip(selected = mode == "GOLD", onClick = { mode = "GOLD" }, label = { Text("Gold") })

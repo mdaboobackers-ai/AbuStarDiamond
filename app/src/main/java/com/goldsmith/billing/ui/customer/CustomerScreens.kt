@@ -25,8 +25,10 @@ import com.goldsmith.billing.data.dao.CustomerDao
 import com.goldsmith.billing.data.dao.InvoiceDao
 import com.goldsmith.billing.data.model.Customer
 import com.goldsmith.billing.data.model.Invoice
+import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.GoldCalc
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
@@ -38,7 +40,8 @@ import javax.inject.Inject
 @HiltViewModel
 class CustomerViewModel @Inject constructor(
     private val customerDao: CustomerDao,
-    private val invoiceDao: InvoiceDao
+    private val invoiceDao: InvoiceDao,
+    settingsRepo: SettingsRepository
 ) : ViewModel() {
     private val _query = MutableStateFlow("")
     val query = _query.asStateFlow()
@@ -54,6 +57,9 @@ class CustomerViewModel @Inject constructor(
 
     val totalCustomers = customerDao.getCustomerCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0)
+
+    val settings = settingsRepo.settingsFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.goldsmith.billing.data.repository.AppSettings())
 
     fun setQuery(q: String) { _query.value = q }
 
@@ -239,6 +245,7 @@ fun CustomerCard(customer: Customer, onViewLedger: () -> Unit, onQuickBill: () -
 @Composable
 fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> Unit, viewModel: CustomerViewModel = hiltViewModel()) {
     val invoices by viewModel.getInvoicesForCustomer(customerId).collectAsState(emptyList())
+    val settings by viewModel.settings.collectAsState()
 
     Scaffold(
         containerColor = AuraColors.Background,
@@ -253,11 +260,21 @@ fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> 
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(invoices) { invoice ->
+                val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K
+                val balanceGold = GoldCalc.pendingPureGold(invoice.remainingBalance, invoiceRate).coerceAtLeast(0.0)
+                val balanceTodayCash = GoldCalc.pendingCashAtRate(invoice.remainingBalance, invoiceRate, settings.goldRate24K)
                 GlassCard(Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(invoice.invoiceNumber, style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer)
                             Text("₹${String.format("%,.2f", invoice.totalAmount)}", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                            if (invoice.paymentStatus.name != "PAID") {
+                                Text(
+                                    "Due today: ₹${String.format("%,.2f", balanceTodayCash)} OR ${String.format("%.3f", balanceGold)}g pure",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AuraColors.Error
+                                )
+                            }
                         }
                         StatusBadge(invoice.paymentStatus.name)
                     }

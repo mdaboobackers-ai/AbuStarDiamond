@@ -22,11 +22,13 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.goldsmith.billing.data.dao.CustomerDao
+import com.goldsmith.billing.data.dao.InvoiceDao
 import com.goldsmith.billing.data.dao.MeltingDao
 import com.goldsmith.billing.data.model.Customer
 import com.goldsmith.billing.data.model.MeltingRecord
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.GoldCalc
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -38,7 +40,8 @@ import javax.inject.Inject
 @HiltViewModel
 class MeltingViewModel @Inject constructor(
     private val meltingDao: MeltingDao,
-    private val customerDao: CustomerDao
+    private val customerDao: CustomerDao,
+    private val invoiceDao: InvoiceDao
 ) : ViewModel() {
 
     val records: StateFlow<List<MeltingRecord>> = meltingDao.getAllMeltingRecords()
@@ -60,13 +63,36 @@ class MeltingViewModel @Inject constructor(
 
     fun saveRecord(record: MeltingRecord, previous: MeltingRecord? = null, onDone: () -> Unit) = viewModelScope.launch {
         meltingDao.insertMeltingRecord(record)
+        val linkedInvoice = record.linkedInvoiceId?.let { invoiceDao.getInvoiceById(it) }
+        val meltingCashDelta = if (previous != null && linkedInvoice != null) {
+            GoldCalc.roundMoney((previous.finalPureWeightGrams - record.finalPureWeightGrams) * linkedInvoice.goldRate24K)
+        } else {
+            0.0
+        }
+        val updatedInvoiceRemaining = linkedInvoice?.let { invoice ->
+            if (previous != null) {
+                val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance + meltingCashDelta)
+                invoiceDao.updateInvoice(invoice.copy(
+                    remainingBalance = newRemaining,
+                    paymentStatus = if (newRemaining <= 0.0) com.goldsmith.billing.data.model.PaymentStatus.PAID else com.goldsmith.billing.data.model.PaymentStatus.PARTIAL,
+                    updatedAt = Date()
+                ))
+                newRemaining
+            } else {
+                invoice.remainingBalance
+            }
+        }
         customerDao.getCustomerById(record.customerId)?.let { customer ->
             val newGoldBalance = if (previous == null) {
                 customer.goldBalanceGrams - record.finalPureWeightGrams
             } else {
                 customer.goldBalanceGrams + previous.finalPureWeightGrams - record.finalPureWeightGrams
             }
-            customerDao.updateCustomer(customer.copy(goldBalanceGrams = newGoldBalance, updatedAt = Date()))
+            customerDao.updateCustomer(customer.copy(
+                cashBalance = updatedInvoiceRemaining ?: customer.cashBalance,
+                goldBalanceGrams = newGoldBalance,
+                updatedAt = Date()
+            ))
         }
         onDone()
     }
@@ -326,8 +352,11 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord
         confirmButton = { GoldButton("Save Record", onClick = {
             val cust = selectedCustomer
             val customerId = cust?.id ?: current?.customerId
-            if (customerId != null && rawWeight.isNotEmpty() && finalWeight.isNotEmpty()) {
-                onSave(MeltingRecord(customerId = customerId, rawWeightGrams = rawWeight.toDoubleOrNull() ?: 0.0, finalPureWeightGrams = finalWeight.toDoubleOrNull() ?: 0.0, purityPercent = purity.toDoubleOrNull() ?: 91.6, notes = notes, imageUris = attachedImages, linkedInvoiceId = current?.linkedInvoiceId))
+            if (customerId != null && rawWeight.isNotEmpty()) {
+                val raw = rawWeight.toDoubleOrNull() ?: 0.0
+                val testedPurity = purity.toDoubleOrNull() ?: 91.6
+                val testedPureWeight = if (raw > 0.0) GoldCalc.fineGold(raw, testedPurity) else finalWeight.toDoubleOrNull() ?: 0.0
+                onSave(MeltingRecord(customerId = customerId, rawWeightGrams = raw, finalPureWeightGrams = testedPureWeight, purityPercent = testedPurity, notes = notes, imageUris = attachedImages, linkedInvoiceId = current?.linkedInvoiceId))
             }
         })},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }

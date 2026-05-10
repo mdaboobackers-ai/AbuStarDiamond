@@ -55,10 +55,11 @@ data class BillItemDraft(
     val purity get() = purityPercent.toDoubleOrNull() ?: 91.6
     val fineGold get() = GoldCalc.fineGold(netW, purity)
     val makingPg get() = makingPerGram.toDoubleOrNull() ?: 0.0
-    val gramsWithMaking get() = fineGold
+    val gramsWithMaking get() = GoldCalc.gramsWithMaking(netW, purity, makingPg)
     
     val stoneVal get() = stoneValue.toDoubleOrNull() ?: 0.0
     
+    fun eqGrams(rate24K: Double) = GoldCalc.equivalentGramsWithStone(netW, purity, makingPg, stoneVal, rate24K)
     fun amount(rate24K: Double) = GoldCalc.itemAmount(netW, purity, rate24K, makingPg, stoneVal)
 }
 
@@ -133,8 +134,8 @@ class BillingViewModel @Inject constructor(
 
     fun totalAmount(rate: Double) = items.sumOf { it.amount(rate) }
     fun totalWeight() = items.sumOf { it.netW }
-    fun totalFineGold() = items.sumOf { it.fineGold }
-    fun totalGramsWithMaking() = items.sumOf { it.gramsWithMaking }
+    fun totalFineGold(rate: Double) = GoldCalc.roundGrams(items.sumOf { it.eqGrams(rate) })
+    fun totalGramsWithMaking(rate: Double) = totalFineGold(rate)
     fun totalGoldPaidValue(rate: Double) = goldPayments.sumOf { GoldCalc.goldPaymentValue(it.gramsValue, it.karat, rate) }
     fun totalGoldPaidPure() = goldPayments.sumOf { it.pureGold }
 
@@ -190,8 +191,8 @@ class BillingViewModel @Inject constructor(
             customerPhone = customer.phone,
             date = Date(),
             totalWeightGrams = totalWeight(),
-            totalFineGoldGrams = totalFineGold(),
-            total916Grams = GoldCalc.equivalent916(totalFineGold()),
+            totalFineGoldGrams = totalFineGold(rate),
+            total916Grams = GoldCalc.equivalent916(totalFineGold(rate)),
             subtotal = subtotal,
             gstPercent = gst,
             gstAmount = gstAmount,
@@ -220,9 +221,11 @@ class BillingViewModel @Inject constructor(
                 purityPercent = draft.purity,
                 karatLabel = draft.purityLabel,
                 makingChargePerGram = draft.makingPg,
+                makingChargePercent = draft.makingPg,
                 stoneValue = draft.stoneVal,
                 imageUri = draft.imageUri,
-                gramsWithMaking = draft.gramsWithMaking,
+                fineGoldGrams = draft.eqGrams(rate),
+                gramsWithMaking = draft.eqGrams(rate),
                 itemAmount = draft.amount(rate)
             )
         }
@@ -606,7 +609,7 @@ private fun BillItemCard(
                         }
                     }
                 }
-                BillField("MAKING /G", draft.makingPerGram, { onUpdate(draft.copy(makingPerGram = it)) }, Modifier.weight(1f), errors["making_$index"])
+                BillField("MAKING %", draft.makingPerGram, { onUpdate(draft.copy(makingPerGram = it)) }, Modifier.weight(1f), errors["making_$index"])
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -620,7 +623,7 @@ private fun BillItemCard(
                             .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(8.dp))
                             .padding(12.dp)
                     ) {
-                        Text(String.format("%.3f", draft.gramsWithMaking), color = AuraColors.OnSurface)
+                        Text(String.format("%.3f", draft.eqGrams(rate24K)), color = AuraColors.OnSurface)
                     }
                 }
             }
@@ -773,8 +776,8 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Bill Summary", style = MaterialTheme.typography.headlineMedium, color = AuraColors.OnSurface)
                     SummaryRow("Total Weight", "${String.format("%.3f", viewModel.totalWeight())}g")
-                    SummaryRow("Pure Gold (24K)", "${String.format("%.3f", viewModel.totalFineGold())}g")
-                    SummaryRow("91.6 Gold", "${String.format("%.3f", GoldCalc.equivalent916(viewModel.totalFineGold()))}g")
+                    SummaryRow("Pure Gold (24K)", "${String.format("%.3f", viewModel.totalFineGold(settings.goldRate24K))}g")
+                    SummaryRow("91.6 Gold", "${String.format("%.3f", GoldCalc.equivalent916(viewModel.totalFineGold(settings.goldRate24K)))}g")
                     HorizontalDivider(color = AuraColors.GlassWhite10)
                     SummaryRow("Sub Total Grams", "${String.format("%.3f", viewModel.totalWeight())}g")
                     SummaryRow("Amount Subtotal", "₹${String.format("%,.2f", subtotal)}")
@@ -940,20 +943,10 @@ private fun BillingBottomBar(
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (step == 1) {
-                        OutlinedButton(
-                            onClick = onBack,
-                            modifier = Modifier.height(48.dp),
-                            border = BorderStroke(1.dp, AuraColors.GlassWhite20),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text("BACK", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface)
-                        }
-                    }
                     GoldButton(
                         text = if (step == 2) "Seal Invoice" else "Next",
                         onClick = onNext,
-                        modifier = Modifier.height(48.dp).defaultMinSize(minWidth = 120.dp)
+                        modifier = Modifier.height(48.dp).defaultMinSize(minWidth = 150.dp)
                     )
                 }
             }

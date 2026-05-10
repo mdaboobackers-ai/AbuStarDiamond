@@ -27,11 +27,36 @@ class BillingLogicTest {
             netWeight = 9.0,
             purityPercent = 91.6,
             rate24K = 7000.0,
-            makingPerGram = 25.0,
+            makingPercent = 7.0,
             stoneValue = 100.0
         )
 
-        assertEquals(58033.0, amount, 0.001)
+        assertEquals(62218.0, amount, 0.001)
+    }
+
+    @Test
+    fun `making percentage is included in equivalent grams`() {
+        val eq = GoldCalc.gramsWithMaking(
+            netWeight = 34.95,
+            purityPercent = 91.6,
+            makingPercent = 7.0
+        )
+
+        assertEquals(34.461, eq, 0.001)
+    }
+
+    @Test
+    fun `stone value converts to gold and is included in equivalent grams`() {
+        val eq = GoldCalc.equivalentGramsWithStone(
+            netWeight = 34.95,
+            purityPercent = 91.6,
+            makingPercent = 7.0,
+            stoneValue = 700.0,
+            rate24K = 7000.0
+        )
+
+        assertEquals(34.561, eq, 0.001)
+        assertEquals(241927.0, GoldCalc.itemAmount(34.95, 91.6, 7000.0, 7.0, 700.0), 0.001)
     }
 
     @Test
@@ -52,6 +77,27 @@ class BillingLogicTest {
 
         assertEquals(77169.0, balance.cash, 0.001)
         assertEquals(11.024, balance.pureGoldGrams, 0.001)
+    }
+
+    @Test
+    fun `pending invoice gold is valued at current gold rate for later cash payment`() {
+        val invoiceDayBalance = 70000.0
+        val invoiceDayRate = 7000.0
+        val todayRate = 8000.0
+
+        assertEquals(10.0, GoldCalc.pendingPureGold(invoiceDayBalance, invoiceDayRate), 0.001)
+        assertEquals(80000.0, GoldCalc.pendingCashAtRate(invoiceDayBalance, invoiceDayRate, todayRate), 0.001)
+
+        val remainingAfterTodayCash = GoldCalc.invoiceBalanceAfterPaymentAtCurrentRate(
+            invoiceRemainingBalance = invoiceDayBalance,
+            invoiceRate24K = invoiceDayRate,
+            currentRate24K = todayRate,
+            cashPaid = 40000.0,
+            goldGrams = 0.0,
+            goldKarat = 24
+        )
+
+        assertEquals(35000.0, remainingAfterTodayCash, 0.001)
     }
 
     @Test

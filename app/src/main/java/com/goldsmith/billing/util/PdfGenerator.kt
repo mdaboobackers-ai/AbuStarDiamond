@@ -2,6 +2,7 @@ package com.goldsmith.billing.util
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -9,10 +10,12 @@ import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import androidx.core.content.FileProvider
+import com.goldsmith.billing.R
 import com.goldsmith.billing.data.model.BillItem
 import com.goldsmith.billing.data.model.CompanyProfile
 import com.goldsmith.billing.data.model.Customer
 import com.goldsmith.billing.data.model.Invoice
+import com.goldsmith.billing.data.model.MeltingRecord
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -33,7 +36,9 @@ object PdfGenerator {
         invoice: Invoice,
         customer: Customer,
         billItems: List<BillItem>,
-        profile: CompanyProfile?
+        profile: CompanyProfile?,
+        meltingRecords: List<MeltingRecord> = emptyList(),
+        currentRate24K: Double = invoice.goldRate24K
     ): Uri? {
         val doc = PdfDocument()
         val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 1).create()
@@ -47,35 +52,43 @@ object PdfGenerator {
         canvas.drawRect(MARGIN, y, PAGE_WIDTH - MARGIN, y + 92f, headerFill)
         canvas.drawRect(MARGIN, y, PAGE_WIDTH - MARGIN, y + 92f, headerBorder)
 
+        val logoBitmap = runCatching {
+            if (!profile?.logoUri.isNullOrBlank()) {
+                context.contentResolver.openInputStream(Uri.parse(profile!!.logoUri))?.use { BitmapFactory.decodeStream(it) }
+            } else {
+                BitmapFactory.decodeResource(context.resources, R.drawable.abu_star_logo)
+            }
+        }.getOrNull() ?: BitmapFactory.decodeResource(context.resources, R.drawable.abu_star_logo)
+        logoBitmap?.let { canvas.drawBitmap(it, null, android.graphics.RectF(MARGIN + 12f, y + 16f, MARGIN + 58f, y + 62f), null) }
+
+        val textStart = MARGIN + if (logoBitmap != null) 68f else 14f
+
         // Company name
         val titlePaint = Paint().apply {
             color = DARK
-            textSize = 22f
+            textSize = 20f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             isAntiAlias = true
         }
-        canvas.drawText(
-            profile?.companyName?.uppercase() ?: "ABU STAR DIAMONDS",
-            MARGIN + 14f, y + 26f, titlePaint
-        )
+        drawTextWithin(canvas, profile?.companyName?.uppercase() ?: "ABU STAR DIAMONDS", textStart, y + 26f, 330f, titlePaint)
 
         val subTitlePaint = Paint().apply {
             color = GRAY; textSize = 9f; isAntiAlias = true
         }
         var headerTextY = y + 42f
         if (profile?.ownerName?.isNotEmpty() == true) {
-            canvas.drawText("Owner: ${profile.ownerName}", MARGIN + 14f, headerTextY, subTitlePaint)
+            drawTextWithin(canvas, "Owner: ${profile.ownerName}", textStart, headerTextY, 310f, subTitlePaint)
             headerTextY += 12f
         }
         val profileAddress = profile?.let { p ->
             listOf(p.address1, p.address2, p.city, p.state, p.pincode).filter { it.isNotEmpty() }.joinToString(", ")
         }.orEmpty()
         if (profileAddress.isNotEmpty()) {
-            canvas.drawText(profileAddress.take(72), MARGIN + 14f, headerTextY, subTitlePaint)
+            drawTextWithin(canvas, profileAddress, textStart, headerTextY, 310f, subTitlePaint)
             headerTextY += 12f
         }
         if (profile?.mobileNumber?.isNotEmpty() == true) {
-            canvas.drawText("Phone: ${profile.mobileNumber}", MARGIN + 14f, headerTextY, subTitlePaint)
+            drawTextWithin(canvas, "Phone: ${profile.mobileNumber}", textStart, headerTextY, 310f, subTitlePaint)
         }
 
         // Invoice number (right-aligned)
@@ -106,15 +119,15 @@ object PdfGenerator {
             letterSpacing = 0.15f; isAntiAlias = true
         }
         canvas.drawText("BILL TO", MARGIN, y + 10f, sectionPaint)
-        y += 16f
+        y += 24f
         val shopName = invoice.customerShopName.ifEmpty { customer.companyName.ifEmpty { customer.name } }
         val ownerName = invoice.customerOwnerName.ifEmpty { customer.name }
         val address = invoice.customerAddress.ifEmpty { customer.address }
         val phone = invoice.customerPhone.ifEmpty { customer.phone }
-        canvas.drawText(shopName, MARGIN, y, valuePaint)
+        drawTextWithin(canvas, shopName, MARGIN, y, 320f, valuePaint)
         y += 14f
-        if (ownerName.isNotEmpty()) { canvas.drawText(ownerName, MARGIN, y, labelPaint); y += 13f }
-        if (address.isNotEmpty()) { canvas.drawText(address.take(72), MARGIN, y, labelPaint); y += 13f }
+        if (ownerName.isNotEmpty()) { drawTextWithin(canvas, ownerName, MARGIN, y, 320f, labelPaint); y += 13f }
+        if (address.isNotEmpty()) { drawTextWithin(canvas, address, MARGIN, y, 320f, labelPaint); y += 13f }
         if (phone.isNotEmpty()) { canvas.drawText("Phone: $phone", MARGIN, y, labelPaint); y += 13f }
         if (customer.gstNumber.isNotEmpty()) {
             canvas.drawText("GSTIN: ${customer.gstNumber}", MARGIN, y, labelPaint); y += 13f
@@ -137,9 +150,14 @@ object PdfGenerator {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             isAntiAlias = true
         }
-        val cols = listOf("DESCRIPTION", "KARAT", "GROSS", "LESS", "NET", "EQ.G", "MAKING", "AMOUNT")
-        val colX = listOf(MARGIN + 2f, 160f, 202f, 242f, 282f, 322f, 365f, 430f)
-        cols.forEachIndexed { i, col -> canvas.drawText(col, colX[i], y + 14f, colPaint) }
+        canvas.drawText("DESCRIPTION", MARGIN + 2f, y + 14f, colPaint)
+        drawRight(canvas, "KARAT", 198f, y + 14f, colPaint)
+        drawRight(canvas, "GROSS", 238f, y + 14f, colPaint)
+        drawRight(canvas, "LESS", 278f, y + 14f, colPaint)
+        drawRight(canvas, "NET", 318f, y + 14f, colPaint)
+        drawRight(canvas, "EQ.G", 365f, y + 14f, colPaint)
+        drawRight(canvas, "MAKING", 418f, y + 14f, colPaint)
+        drawRight(canvas, "AMOUNT", PAGE_WIDTH - MARGIN - 2f, y + 14f, colPaint)
         y += 22f
 
         // Item rows
@@ -149,18 +167,18 @@ object PdfGenerator {
                 val rowBg = Paint().apply { color = Color.parseColor("#FAFAFA"); style = Paint.Style.FILL }
                 canvas.drawRect(MARGIN, y - 2f, PAGE_WIDTH - MARGIN, y + 16f, rowBg)
             }
-            canvas.drawText(item.description.take(22), colX[0], y + 11f, rowPaint)
-            canvas.drawText(item.karatLabel, colX[1], y + 11f, rowPaint)
-            canvas.drawText(String.format("%.2f", item.grossWeightGrams), colX[2], y + 11f, rowPaint)
-            canvas.drawText(String.format("%.2f", item.lessWeightGrams), colX[3], y + 11f, rowPaint)
-            canvas.drawText(String.format("%.2f", item.netWeightGrams), colX[4], y + 11f, rowPaint)
-            canvas.drawText(String.format("%.3f", item.fineGoldGrams), colX[5], y + 11f, rowPaint)
-            canvas.drawText(String.format("%.0f", item.makingChargePerGram), colX[6], y + 11f, rowPaint)
+            drawTextWithin(canvas, item.description.ifEmpty { "Jewellery Item" }, MARGIN + 2f, y + 11f, 108f, rowPaint)
+            drawRight(canvas, item.karatLabel.substringBefore(" "), 198f, y + 11f, rowPaint)
+            drawRight(canvas, String.format("%.2f", item.grossWeightGrams), 238f, y + 11f, rowPaint)
+            drawRight(canvas, String.format("%.2f", item.lessWeightGrams), 278f, y + 11f, rowPaint)
+            drawRight(canvas, String.format("%.2f", item.netWeightGrams), 318f, y + 11f, rowPaint)
+            drawRight(canvas, String.format("%.3f", item.gramsWithMaking.takeIf { it > 0.0 } ?: item.fineGoldGrams), 365f, y + 11f, rowPaint)
+            drawRight(canvas, String.format("%.2f%%", item.makingChargePercent.takeIf { it > 0.0 } ?: item.makingChargePerGram), 418f, y + 11f, rowPaint)
             val amtPaint = Paint().apply {
                 color = DARK; textSize = 9f
                 typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD); isAntiAlias = true
             }
-            canvas.drawText("₹${String.format("%,.0f", item.itemAmount)}", colX[7], y + 11f, amtPaint)
+            drawRight(canvas, "₹${String.format("%,.0f", item.itemAmount)}", PAGE_WIDTH - MARGIN - 2f, y + 11f, amtPaint)
             y += 20f
         }
 
@@ -207,19 +225,32 @@ object PdfGenerator {
             drawSummaryRow("Gold Paid", "${String.format("%.3f", invoice.goldPaidGrams)}g", color = Color.parseColor("#2E7D32"))
             y += 14f
         }
+        meltingRecords.forEach { record ->
+            val shortage = GoldCalc.roundGrams(record.rawWeightGrams - record.finalPureWeightGrams).coerceAtLeast(0.0)
+            drawSummaryRow(
+                "Melting / Purity Check",
+                "${String.format("%.2f", record.purityPercent)}% -> ${String.format("%.3f", record.finalPureWeightGrams)}g pure",
+                color = if (shortage > 0.0) Color.parseColor("#C62828") else GRAY
+            )
+            y += 14f
+            if (shortage > 0.0) {
+                drawSummaryRow("Purity Difference", "${String.format("%.3f", shortage)}g pure short", color = Color.parseColor("#C62828"))
+                y += 14f
+            }
+        }
         y += 4f
         drawDivider(canvas, y, GOLD)
         y += 10f
         drawSummaryRow(
             "BALANCE",
-            "₹${String.format("%,.2f", invoice.remainingBalance)}",
+            "₹${String.format("%,.2f", GoldCalc.pendingCashAtRate(invoice.remainingBalance, invoice.goldRate24K.coerceAtLeast(1.0), currentRate24K.coerceAtLeast(1.0)))}",
             bold = true,
             color = if (invoice.remainingBalance > 0) Color.parseColor("#C62828") else Color.parseColor("#2E7D32")
         )
         y += 14f
         drawSummaryRow(
             "BALANCE GOLD",
-            "${String.format("%.3f", (invoice.remainingBalance.coerceAtLeast(0.0) / invoice.goldRate24K.coerceAtLeast(1.0)))}g pure",
+            "${String.format("%.3f", GoldCalc.pendingPureGold(invoice.remainingBalance, invoice.goldRate24K.coerceAtLeast(1.0)).coerceAtLeast(0.0))}g pure",
             bold = true,
             color = if (invoice.remainingBalance > 0) Color.parseColor("#C62828") else Color.parseColor("#2E7D32")
         )
@@ -257,6 +288,20 @@ object PdfGenerator {
     private fun drawDivider(canvas: Canvas, y: Float, color: Int) {
         val paint = Paint().apply { this.color = color; strokeWidth = 0.8f }
         canvas.drawLine(MARGIN, y, PAGE_WIDTH - MARGIN, y, paint)
+    }
+
+    private fun drawRight(canvas: Canvas, text: String, rightX: Float, baseline: Float, paint: Paint) {
+        val originalAlign = paint.textAlign
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText(text, rightX, baseline, paint)
+        paint.textAlign = originalAlign
+    }
+
+    private fun drawTextWithin(canvas: Canvas, text: String, x: Float, baseline: Float, maxWidth: Float, paint: Paint) {
+        val fitted = paint.breakText(text, true, maxWidth, null).let { count ->
+            if (count >= text.length) text else text.take((count - 1).coerceAtLeast(0)).trimEnd() + "…"
+        }
+        canvas.drawText(fitted, x, baseline, paint)
     }
 
     fun shareViaWhatsApp(context: Context, pdfUri: Uri, phoneNumber: String) {

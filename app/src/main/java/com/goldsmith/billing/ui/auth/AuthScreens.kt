@@ -179,6 +179,17 @@ fun PinVerifyScreen(
     var errorMsg by remember { mutableStateOf("") }
     var shakeAnim by remember { mutableStateOf(false) }
     var biometricPromptShown by remember { mutableStateOf(false) }
+    var biometricFailCount by remember { mutableIntStateOf(0) }
+
+    fun markBiometricFailed(message: String = "Mobile security failed. Try again.") {
+        biometricFailCount += 1
+        errorMsg = if (biometricFailCount >= 3) "Use PIN to continue" else message
+    }
+
+    fun showPinFallback(message: String = "Use PIN to continue") {
+        biometricFailCount = 3
+        errorMsg = message
+    }
 
     LaunchedEffect(Unit) {
         if (!viewModel.isPinSet) { onFirstTime(); return@LaunchedEffect }
@@ -208,6 +219,7 @@ fun PinVerifyScreen(
         MobileSecurityAuth.isAvailable(bm.canAuthenticate(MobileSecurityAuth.allowedAuthenticators))
     }
     val showMobileSecurity = viewModel.isBiometricEnabled && canShowBiometric
+    val allowPinEntry = !showMobileSecurity || biometricFailCount >= 3
 
     LaunchedEffect(viewModel.isBiometricEnabled, canShowBiometric) {
         if (viewModel.isPinSet && viewModel.isBiometricEnabled && canShowBiometric && !biometricPromptShown) {
@@ -215,23 +227,28 @@ fun PinVerifyScreen(
             showBiometric(
                 context = context,
                 onSuccess = onVerified,
+                onFailed = { markBiometricFailed() },
+                onFallbackToPin = { showPinFallback(it) },
                 onError = { message -> errorMsg = message }
             )
         }
     }
 
     PinScaffold(
-        title = "Unlock Abu Star",
-        subtitle = if (showMobileSecurity) "Use mobile security or enter PIN" else "Enter PIN to continue",
+        title = if (!allowPinEntry) "Mobile Security" else "Enter Secure PIN",
+        subtitle = if (!allowPinEntry) "Confirm with fingerprint, face unlock, or phone lock" else "Biometric failed. Use PIN to continue",
         pinLength = pin.length,
         errorMsg = errorMsg,
         showBiometric = showMobileSecurity,
+        showPinEntry = allowPinEntry,
         onDigit = ::onDigit,
         onBack = ::onBack,
         onBiometric = {
             showBiometric(
                 context = context,
                 onSuccess = onVerified,
+                onFailed = { markBiometricFailed() },
+                onFallbackToPin = { showPinFallback(it) },
                 onError = { message -> errorMsg = message }
             )
         }
@@ -246,6 +263,7 @@ private fun PinScaffold(
     pinLength: Int,
     errorMsg: String,
     showBiometric: Boolean,
+    showPinEntry: Boolean = true,
     onDigit: (String) -> Unit,
     onBack: () -> Unit,
     onBiometric: () -> Unit
@@ -288,9 +306,9 @@ private fun PinScaffold(
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.padding(bottom = 34.dp)
+                modifier = Modifier.padding(bottom = 24.dp)
             ) {
-                Box(Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(88.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(
                         progress = { 0.68f },
                         modifier = Modifier.fillMaxSize().rotate(ringRotation),
@@ -328,11 +346,11 @@ private fun PinScaffold(
                 Modifier
                     .background(AuraColors.GlassWhite12, RoundedCornerShape(32.dp))
                     .border(1.dp, AuraColors.GlassBorder, RoundedCornerShape(32.dp))
-                    .padding(32.dp)
+                    .padding(horizontal = 26.dp, vertical = 28.dp)
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(32.dp)
+                    verticalArrangement = Arrangement.spacedBy(if (showPinEntry) 26.dp else 22.dp)
                 ) {
                     // Title
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -341,53 +359,82 @@ private fun PinScaffold(
                         Text(subtitle.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.6f), textAlign = TextAlign.Center, letterSpacing = 2.sp)
                     }
 
-                    // PIN dots
-                    PinDots(filledCount = pinLength)
+                    if (showPinEntry) {
+                        PinDots(filledCount = pinLength)
+                    }
 
                     // Error
                     AnimatedVisibility(errorMsg.isNotEmpty()) {
                         Text(errorMsg, color = AuraColors.Error, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
                     }
 
-                    // Keypad
-                    Column(verticalArrangement = Arrangement.spacedBy(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        listOf(
-                            listOf("1","2","3"),
-                            listOf("4","5","6"),
-                            listOf("7","8","9")
-                        ).forEach { row ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                                row.forEach { digit ->
-                                    KeypadButton(digit, onClick = { onDigit(digit) })
-                                }
+                    if (!showPinEntry) {
+                        Box(Modifier.size(148.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                progress = { 0.78f },
+                                modifier = Modifier.fillMaxSize().rotate(-ringRotation),
+                                color = AuraColors.PrimaryContainer.copy(alpha = 0.95f),
+                                trackColor = AuraColors.GlassWhite10,
+                                strokeWidth = 3.dp,
+                                strokeCap = StrokeCap.Round
+                            )
+                            Box(
+                                Modifier
+                                    .size((92 * pulse).dp)
+                                    .background(AuraColors.PrimaryContainer.copy(alpha = 0.14f), CircleShape)
+                                    .border(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Fingerprint, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(54.dp))
                             }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                            if (showBiometric) {
-                                KeypadButton("", onClick = onBiometric) {
-                                    Icon(Icons.Default.Fingerprint, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(28.dp))
+                        Text(
+                            "PIN will appear after 3 failed mobile-security attempts.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuraColors.OnSurfaceVariant.copy(alpha = 0.72f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    if (showPinEntry) {
+                        Column(verticalArrangement = Arrangement.spacedBy(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            listOf(
+                                listOf("1","2","3"),
+                                listOf("4","5","6"),
+                                listOf("7","8","9")
+                            ).forEach { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                                    row.forEach { digit ->
+                                        KeypadButton(digit, onClick = { onDigit(digit) })
+                                    }
                                 }
-                            } else {
-                                Spacer(Modifier.size(68.dp))
                             }
-                            KeypadButton("0", onClick = { onDigit("0") })
-                            KeypadButton("", onClick = onBack) {
-                                Icon(Icons.Default.Backspace, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(24.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                                if (showBiometric) {
+                                    KeypadButton("", onClick = onBiometric) {
+                                        Icon(Icons.Default.Fingerprint, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(28.dp))
+                                    }
+                                } else {
+                                    Spacer(Modifier.size(68.dp))
+                                }
+                                KeypadButton("0", onClick = { onDigit("0") })
+                                KeypadButton("", onClick = onBack) {
+                                    Icon(Icons.Default.Backspace, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(24.dp))
+                                }
                             }
                         }
                     }
 
                     if (showBiometric) {
-                        OutlinedButton(
+                        Button(
                             onClick = onBiometric,
-                            modifier = Modifier.fillMaxWidth().height(48.dp),
-                            border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f)),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
+                            modifier = Modifier.fillMaxWidth().height(if (showPinEntry) 48.dp else 54.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AuraColors.PrimaryContainer, contentColor = AuraColors.OnPrimary),
                             shape = RoundedCornerShape(14.dp)
                         ) {
                             Icon(Icons.Default.Fingerprint, null, modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("USE MOBILE SECURITY", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+                            Text(if (showPinEntry) "TRY MOBILE SECURITY" else "OPEN MOBILE SECURITY", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
                         }
                     }
 
@@ -437,6 +484,8 @@ private fun PinScaffold(
 private fun showBiometric(
     context: android.content.Context,
     onSuccess: () -> Unit,
+    onFailed: () -> Unit = {},
+    onFallbackToPin: (String) -> Unit = {},
     onError: (String) -> Unit = {}
 ) {
     val activity = context as? FragmentActivity ?: return
@@ -447,12 +496,21 @@ private fun showBiometric(
                 onSuccess()
             }
 
+            override fun onAuthenticationFailed() {
+                onFailed()
+            }
+
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                if (errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON &&
-                    errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
-                    errorCode != BiometricPrompt.ERROR_CANCELED
-                ) {
-                    onError(errString.toString())
+                when (errorCode) {
+                    BiometricPrompt.ERROR_LOCKOUT,
+                    BiometricPrompt.ERROR_LOCKOUT_PERMANENT,
+                    BiometricPrompt.ERROR_HW_UNAVAILABLE,
+                    BiometricPrompt.ERROR_NO_BIOMETRICS,
+                    BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL -> onFallbackToPin("Use PIN to continue")
+                    BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+                    BiometricPrompt.ERROR_USER_CANCELED,
+                    BiometricPrompt.ERROR_CANCELED -> Unit
+                    else -> onError(errString.toString())
                 }
             }
         }

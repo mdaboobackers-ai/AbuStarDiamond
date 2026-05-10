@@ -31,14 +31,31 @@ object GoldCalc {
     fun fineGold(netWeight: Double, purityPercent: Double): Double =
         roundGrams(netWeight * (purityPercent / 100.0))
 
+    fun gramsWithMaking(
+        netWeight: Double,
+        purityPercent: Double,
+        makingPercent: Double
+    ): Double = roundGrams(netWeight * ((purityPercent + makingPercent) / 100.0))
+
+    fun stoneEquivalentGrams(stoneValue: Double, rate24K: Double): Double =
+        if (rate24K > 0.0) roundGrams(stoneValue.coerceAtLeast(0.0) / rate24K) else 0.0
+
+    fun equivalentGramsWithStone(
+        netWeight: Double,
+        purityPercent: Double,
+        makingPercent: Double,
+        stoneValue: Double,
+        rate24K: Double
+    ): Double = roundGrams(gramsWithMaking(netWeight, purityPercent, makingPercent) + stoneEquivalentGrams(stoneValue, rate24K))
+
     fun itemAmount(
         netWeight: Double,
         purityPercent: Double,
         rate24K: Double,
-        makingPerGram: Double,
+        makingPercent: Double,
         stoneValue: Double = 0.0
     ): Double {
-        return roundMoney((fineGold(netWeight, purityPercent) * rate24K) + (netWeight * makingPerGram) + stoneValue)
+        return roundMoney((gramsWithMaking(netWeight, purityPercent, makingPercent) * rate24K) + stoneValue)
     }
 
     fun equivalent916(fineGoldGrams: Double): Double = roundGrams(fineGoldGrams / 0.916)
@@ -50,6 +67,41 @@ object GoldCalc {
 
     fun goldPaymentValue(goldGrams: Double, karat: Int, rate24K: Double): Double =
         roundMoney(pureGoldFromKarat(goldGrams, karat) * rate24K)
+
+    fun pureGoldFromCash(cashAmount: Double, rate24K: Double): Double =
+        if (rate24K > 0.0) cashAmount / rate24K else 0.0
+
+    fun pendingPureGold(invoiceRemainingBalance: Double, invoiceRate24K: Double): Double =
+        if (invoiceRate24K > 0.0) invoiceRemainingBalance / invoiceRate24K else 0.0
+
+    fun pendingCashAtRate(invoiceRemainingBalance: Double, invoiceRate24K: Double, currentRate24K: Double): Double =
+        roundMoney(pendingPureGold(invoiceRemainingBalance, invoiceRate24K).coerceAtLeast(0.0) * currentRate24K)
+
+    fun invoiceBalanceAfterPaymentAtCurrentRate(
+        invoiceRemainingBalance: Double,
+        invoiceRate24K: Double,
+        currentRate24K: Double,
+        cashPaid: Double,
+        goldGrams: Double,
+        goldKarat: Int
+    ): Double {
+        val pendingPure = pendingPureGold(invoiceRemainingBalance, invoiceRate24K)
+        val paidPure = pureGoldFromCash(cashPaid, currentRate24K) + pureGoldFromKarat(goldGrams, goldKarat)
+        return roundMoney((pendingPure - paidPure) * invoiceRate24K)
+    }
+
+    fun invoiceBalanceAfterReversingPaymentAtCurrentRate(
+        invoiceRemainingBalance: Double,
+        invoiceRate24K: Double,
+        currentRate24K: Double,
+        cashPaid: Double,
+        goldGrams: Double,
+        goldKarat: Int
+    ): Double {
+        val pendingPure = pendingPureGold(invoiceRemainingBalance, invoiceRate24K)
+        val reversedPure = pureGoldFromCash(cashPaid, currentRate24K) + pureGoldFromKarat(goldGrams, goldKarat)
+        return roundMoney((pendingPure + reversedPure) * invoiceRate24K)
+    }
 
     fun remainingBalance(
         totalAmount: Double,
