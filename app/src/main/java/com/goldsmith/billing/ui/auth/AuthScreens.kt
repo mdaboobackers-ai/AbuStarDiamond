@@ -48,8 +48,13 @@ object MobileSecurityAuth {
         BiometricManager.Authenticators.BIOMETRIC_STRONG or
             BiometricManager.Authenticators.DEVICE_CREDENTIAL
 
+    val loginPromptAuthenticators: Int = BiometricManager.Authenticators.BIOMETRIC_STRONG
+
     fun isAvailable(canAuthenticateResult: Int): Boolean =
         canAuthenticateResult == BiometricManager.BIOMETRIC_SUCCESS
+
+    fun shouldFallbackToPinAfterFailures(failedAttempts: Int): Boolean =
+        failedAttempts >= 3
 }
 
 // ─── ViewModel ────────────────────────────────────────────────────────────────
@@ -490,14 +495,22 @@ private fun showBiometric(
 ) {
     val activity = context as? FragmentActivity ?: return
     val executor = ContextCompat.getMainExecutor(context)
-    val biometricPrompt = BiometricPrompt(activity, executor,
+    var failedAttempts = 0
+    lateinit var biometricPrompt: BiometricPrompt
+    biometricPrompt = BiometricPrompt(activity, executor,
         object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 onSuccess()
             }
 
             override fun onAuthenticationFailed() {
-                onFailed()
+                failedAttempts += 1
+                if (MobileSecurityAuth.shouldFallbackToPinAfterFailures(failedAttempts)) {
+                    biometricPrompt.cancelAuthentication()
+                    onFallbackToPin("Biometric failed 3 times. Enter app PIN.")
+                } else {
+                    onFailed()
+                }
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -507,7 +520,7 @@ private fun showBiometric(
                     BiometricPrompt.ERROR_HW_UNAVAILABLE,
                     BiometricPrompt.ERROR_NO_BIOMETRICS,
                     BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL -> onFallbackToPin("Use PIN to continue")
-                    BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+                    BiometricPrompt.ERROR_NEGATIVE_BUTTON -> onFallbackToPin("Use PIN to continue")
                     BiometricPrompt.ERROR_USER_CANCELED,
                     BiometricPrompt.ERROR_CANCELED -> Unit
                     else -> onError(errString.toString())
@@ -518,8 +531,9 @@ private fun showBiometric(
     biometricPrompt.authenticate(
         BiometricPrompt.PromptInfo.Builder()
             .setTitle("Verify Identity")
-            .setSubtitle("Use fingerprint, face unlock, screen lock, or device credential")
-            .setAllowedAuthenticators(MobileSecurityAuth.allowedAuthenticators)
+            .setSubtitle("Use fingerprint or face unlock")
+            .setNegativeButtonText("Use app PIN")
+            .setAllowedAuthenticators(MobileSecurityAuth.loginPromptAuthenticators)
             .build()
     )
 }

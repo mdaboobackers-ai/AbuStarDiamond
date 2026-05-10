@@ -16,8 +16,16 @@ class SecurityAndBackupConfigTest {
             BiometricManager.Authenticators.DEVICE_CREDENTIAL
 
         assertEquals(expected, MobileSecurityAuth.allowedAuthenticators)
+        assertEquals(BiometricManager.Authenticators.BIOMETRIC_STRONG, MobileSecurityAuth.loginPromptAuthenticators)
         assertTrue(MobileSecurityAuth.isAvailable(BiometricManager.BIOMETRIC_SUCCESS))
         assertFalse(MobileSecurityAuth.isAvailable(BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED))
+    }
+
+    @Test
+    fun `login biometric falls back to app pin after three biometric failures`() {
+        assertFalse(MobileSecurityAuth.shouldFallbackToPinAfterFailures(2))
+        assertTrue(MobileSecurityAuth.shouldFallbackToPinAfterFailures(3))
+        assertTrue(MobileSecurityAuth.shouldFallbackToPinAfterFailures(4))
     }
 
     @Test
