@@ -22,6 +22,7 @@ import com.goldsmith.billing.ui.history.InvoiceHistoryScreen
 import com.goldsmith.billing.ui.history.InvoiceDetailScreen
 import com.goldsmith.billing.ui.melting.MeltingScreen
 import com.goldsmith.billing.ui.ocr.HallmarkScannerScreen
+import com.goldsmith.billing.ui.settings.DataImportScreen
 import com.goldsmith.billing.ui.settings.SettingsScreen
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.goldsmith.billing.ui.auth.AuthViewModel
@@ -45,6 +46,7 @@ sealed class Screen(val route: String) {
     }
     object Melting       : Screen("melting")
     object Settings      : Screen("settings")
+    object DataImport    : Screen("data_import")
     object Backup        : Screen("backup")
     object Analytics     : Screen("analytics")
     object HallmarkScan  : Screen("hallmark_scan")
@@ -168,7 +170,14 @@ fun GoldsmithNavGraph(
         }
 
         composable(Screen.Settings.route) {
-            SettingsScreen(onBack = { navController.popBackStack() })
+            SettingsScreen(
+                onBack = { navController.popBackStack() },
+                onImport = { navController.navigate(Screen.DataImport.route) }
+            )
+        }
+
+        composable(Screen.DataImport.route) {
+            DataImportScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Screen.Backup.route) {

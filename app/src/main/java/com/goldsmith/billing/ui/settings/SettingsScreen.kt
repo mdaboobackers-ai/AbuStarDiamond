@@ -87,7 +87,7 @@ class SettingsViewModel @Inject constructor(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: SettingsViewModel = hiltViewModel()) {
     val context = LocalContext.current
     val settings by viewModel.settings.collectAsState()
     val profile by viewModel.profile.collectAsState()
@@ -351,6 +351,17 @@ fun SettingsScreen(onBack: () -> Unit, viewModel: SettingsViewModel = hiltViewMo
                             Icon(Icons.Default.Edit, null, tint = AuraColors.PrimaryContainer)
                         }
                     }
+                }
+            }
+
+            item {
+                SettingsSection("Data Management") {
+                    SettingsItem(
+                        icon = Icons.Default.UploadFile,
+                        title = "Bulk Import",
+                        subtitle = "Import customers or billing from XLSX, CSV, or Google Sheets",
+                        onClick = onImport
+                    )
                 }
             }
 

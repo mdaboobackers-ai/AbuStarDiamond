@@ -11,6 +11,9 @@ interface CustomerDao {
     @Query("SELECT * FROM customers ORDER BY name ASC")
     fun getAllCustomers(): Flow<List<Customer>>
 
+    @Query("SELECT * FROM customers ORDER BY name ASC")
+    suspend fun getAllCustomersSync(): List<Customer>
+
     @Query("SELECT * FROM customers WHERE name LIKE '%' || :query || '%' OR phone LIKE '%' || :query || '%' OR companyName LIKE '%' || :query || '%' ORDER BY name ASC LIMIT 20")
     fun searchCustomers(query: String): Flow<List<Customer>>
 
@@ -44,6 +47,9 @@ interface CustomerDao {
 interface InvoiceDao {
     @Query("SELECT * FROM invoices ORDER BY date DESC")
     fun getAllInvoices(): Flow<List<Invoice>>
+
+    @Query("SELECT * FROM invoices ORDER BY date DESC")
+    suspend fun getAllInvoicesSync(): List<Invoice>
 
     @Query("SELECT * FROM invoices WHERE customerId = :customerId ORDER BY date DESC")
     fun getInvoicesByCustomer(customerId: Long): Flow<List<Invoice>>
