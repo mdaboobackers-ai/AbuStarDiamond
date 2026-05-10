@@ -1,5 +1,6 @@
 package com.goldsmith.billing.ui.settings
 
+import android.app.Activity
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +22,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.*
@@ -28,6 +30,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
+import com.goldsmith.billing.BuildConfig
 import com.goldsmith.billing.R
 import com.goldsmith.billing.data.dao.CompanyProfileDao
 import com.goldsmith.billing.data.model.CompanyProfile
@@ -117,7 +120,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
             TopAppBar(
                 title = {
                     Text(
-                        "SETTINGS",
+                        stringResource(R.string.settings).uppercase(),
                         style = MaterialTheme.typography.labelSmall,
                         color = AuraColors.PrimaryContainer,
                         fontSize = 16.sp,
@@ -284,7 +287,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
 
             // ── Company Profile ────────────────────────────────────────────
             item {
-                SettingsSection("Company Profile") {
+                SettingsSection(stringResource(R.string.company_profile)) {
                     Row(
                         Modifier.fillMaxWidth().padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -355,11 +358,11 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
             }
 
             item {
-                SettingsSection("Data Management") {
+                SettingsSection(stringResource(R.string.data_management)) {
                     SettingsItem(
                         icon = Icons.Default.UploadFile,
-                        title = "Bulk Import",
-                        subtitle = "Import customers or billing from XLSX, CSV, or Google Sheets",
+                        title = stringResource(R.string.bulk_import),
+                        subtitle = stringResource(R.string.bulk_import_subtitle),
                         onClick = onImport
                     )
                 }
@@ -367,21 +370,22 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
 
             // ── Appearance ────────────────────────────────────────────────
             item {
-                SettingsSection("Appearance") {
+                SettingsSection(stringResource(R.string.appearance)) {
                     SettingsToggle(
                         icon = Icons.Default.DarkMode,
-                        title = "Dark Theme",
-                        subtitle = if (settings.isDarkTheme) "Aura Lumina Dark" else "Light Mode",
+                        title = stringResource(R.string.dark_theme),
+                        subtitle = if (settings.isDarkTheme) "Aura Lumina Dark" else stringResource(R.string.light_mode),
                         checked = settings.isDarkTheme,
                         onChecked = viewModel::updateTheme
                     )
                     SettingsDivider()
                     SettingsItem(
                         icon = Icons.Default.Language,
-                        title = "Language",
+                        title = stringResource(R.string.language),
                         subtitle = if (settings.language == "ta") "தமிழ் (Tamil)" else "English",
                         onClick = {
                             viewModel.updateLanguage(if (settings.language == "en") "ta" else "en")
+                            (context as? Activity)?.recreate()
                         },
                         trailing = {
                             Box(
@@ -403,7 +407,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
 
             // ── Gold Rates ────────────────────────────────────────────────
             item {
-                SettingsSection("Gold Rates") {
+                SettingsSection(stringResource(R.string.gold_rates)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             Modifier.fillMaxWidth(),
@@ -411,13 +415,13 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "Current Rates (per gram)",
+                                stringResource(R.string.current_rates_per_gram),
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = AuraColors.OnSurface,
                                 fontWeight = FontWeight.Medium
                             )
                             TextButton(onClick = { showRateDialog = true }) {
-                                Text("Edit", color = AuraColors.PrimaryContainer,
+                                Text(stringResource(R.string.edit), color = AuraColors.PrimaryContainer,
                                     style = MaterialTheme.typography.labelSmall)
                             }
                         }
@@ -432,7 +436,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                     SettingsDivider()
                     SettingsItem(
                         icon = Icons.Default.Percent,
-                        title = "GST Percentage",
+                        title = stringResource(R.string.gst_percent),
                         subtitle = "${settings.gstPercent}%",
                         onClick = { showGstDialog = true }
                     )
@@ -441,11 +445,11 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
 
             // ── Multi-User prefix ──────────────────────────────────────────
             item {
-                SettingsSection("Identity") {
+                SettingsSection(stringResource(R.string.identity)) {
                     SettingsItem(
                         icon = Icons.Default.Person,
-                        title = "Staff Prefix",
-                        subtitle = "Invoice Prefix: '${settings.userPrefix}'",
+                        title = stringResource(R.string.staff_prefix),
+                        subtitle = "${stringResource(R.string.invoice_prefix)}: '${settings.userPrefix}'",
                         onClick = { showPrefixDialog = true }
                     )
                 }
@@ -453,25 +457,25 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
 
             // ── Security ──────────────────────────────────────────────────
             item {
-                SettingsSection("Security") {
+                SettingsSection(stringResource(R.string.security)) {
                     SettingsItem(
                         icon = Icons.Default.Lock,
-                        title = "Change PIN",
-                        subtitle = "Update your 4-digit secure PIN",
+                        title = stringResource(R.string.change_pin),
+                        subtitle = stringResource(R.string.change_pin_subtitle),
                         onClick = { showPinDialog = true }
                     )
                     SettingsDivider()
                     SettingsToggle(
                         icon = Icons.Default.Fingerprint,
-                        title = "Biometric Authentication",
-                        subtitle = if (biometricEnabled) "Fingerprint unlock is active" else "Use fingerprint to unlock",
+                        title = stringResource(R.string.biometric_auth),
+                        subtitle = if (biometricEnabled) stringResource(R.string.biometric_active) else stringResource(R.string.biometric_use),
                         checked = biometricEnabled,
                         onChecked = { showBiometricConfirm = it }
                     )
                     SettingsDivider()
                     SettingsItem(
                         icon = Icons.Default.Timer,
-                        title = "Auto-Lock Duration",
+                        title = stringResource(R.string.auto_lock),
                         subtitle = if (settings.inactivityLockSecs > 0) 
                             "Locks after ${settings.inactivityLockSecs}s of inactivity"
                             else "Auto-lock disabled",
@@ -482,22 +486,22 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
 
             // ── Backup ────────────────────────────────────────────────────
             item {
-                SettingsSection("Backup & Sync") {
+                SettingsSection(stringResource(R.string.backup_sync)) {
                     SettingsToggle(
                         icon = Icons.Default.CloudUpload,
-                        title = "Auto Daily Backup",
-                        subtitle = "Automatically backup to Google Drive",
+                        title = stringResource(R.string.auto_daily_backup),
+                        subtitle = stringResource(R.string.auto_daily_backup_subtitle),
                         checked = settings.autoBackupEnabled,
                         onChecked = viewModel::updateAutoBackup
                     )
                     SettingsDivider()
                     SettingsItem(
                         icon = Icons.Default.Backup,
-                        title = "Last Backup",
+                        title = stringResource(R.string.last_backup),
                         subtitle = if (settings.lastBackupTime > 0)
                             java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.getDefault())
                                 .format(java.util.Date(settings.lastBackupTime))
-                        else "Never backed up",
+                        else stringResource(R.string.never_backed_up),
                         onClick = { showBackupInfo = true }
                     )
                 }
@@ -516,24 +520,35 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                                 .background(AuraColors.SurfaceContainerHighest),
                             contentAlignment = Alignment.Center
                         ) {
-                            Image(
-                                painter = painterResource(R.drawable.abu_star_logo),
-                                contentDescription = "Abu Star Diamonds",
-                                modifier = Modifier
-                                    .fillMaxHeight(0.85f)
-                                    .aspectRatio(1f),
-                                contentScale = ContentScale.Fit
-                            )
+                            if (profile?.logoUri?.isNotBlank() == true) {
+                                AsyncImage(
+                                    model = profile!!.logoUri,
+                                    contentDescription = profile?.companyName ?: stringResource(R.string.app_name),
+                                    modifier = Modifier
+                                        .fillMaxHeight(0.85f)
+                                        .aspectRatio(1f),
+                                    contentScale = ContentScale.Fit
+                                )
+                            } else {
+                                Image(
+                                    painter = painterResource(R.drawable.abu_star_logo),
+                                    contentDescription = stringResource(R.string.app_name),
+                                    modifier = Modifier
+                                        .fillMaxHeight(0.85f)
+                                        .aspectRatio(1f),
+                                    contentScale = ContentScale.Fit
+                                )
+                            }
                         }
                         Spacer(Modifier.height(12.dp))
                         Text(
-                            "Abu Star Diamonds",
+                            profile?.companyName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.app_name),
                             style = MaterialTheme.typography.headlineSmall,
                             color = AuraColors.PrimaryContainer,
                             modifier = Modifier.align(Alignment.CenterHorizontally)
                         )
                         Text(
-                            "Trust · Purity · Elegance",
+                            stringResource(R.string.app_subtitle),
                             style = MaterialTheme.typography.labelSmall,
                             color = AuraColors.OnSurfaceVariant,
                             letterSpacing = 2.sp,
@@ -541,7 +556,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "Version 1.0.0 · Goldsmith Billing Suite",
+                            "Version ${BuildConfig.VERSION_NAME} · Goldsmith Billing Suite",
                             style = MaterialTheme.typography.bodyMedium,
                             color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f),
                             modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -856,43 +871,79 @@ private fun CompanyProfileDialog(
     var state by remember { mutableStateOf(current?.state ?: "") }
     var pin by remember { mutableStateOf(current?.pincode ?: "") }
     var gst by remember { mutableStateOf(current?.gstNumber ?: "") }
+    var logoUri by remember { mutableStateOf(current?.logoUri ?: "") }
+    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let { logoUri = it.toString() }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AuraColors.SurfaceContainerHigh,
-        title = { Text("Company Profile", color = AuraColors.OnSurface) },
+        title = { Text(stringResource(R.string.company_profile), color = AuraColors.OnSurface) },
         text = {
             Column(
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                GhostTextField(name, { name = it }, "Company Name")
-                GhostTextField(owner, { owner = it }, "Owner Name")
-                GhostTextField(mobile, { mobile = it }, "Mobile",
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Phone))
-                GhostTextField(addr1, { addr1 = it }, "Address Line 1")
-                GhostTextField(addr2, { addr2 = it }, "Address Line 2")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GhostTextField(city, { city = it }, "City", modifier = Modifier.weight(1f))
-                    GhostTextField(state, { state = it }, "State", modifier = Modifier.weight(1f))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        Modifier
+                            .size(72.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(AuraColors.SurfaceContainerHighest)
+                            .border(1.dp, AuraColors.GlassWhite20, RoundedCornerShape(14.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (logoUri.isNotBlank()) {
+                            AsyncImage(
+                                model = logoUri,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Image(
+                                painter = painterResource(R.drawable.abu_star_logo),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    }
+                    OutlinedButton(onClick = { logoPicker.launch("image/*") }) {
+                        Icon(Icons.Default.AddPhotoAlternate, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.change_logo))
+                    }
                 }
-                GhostTextField(pin, { pin = it }, "Pincode",
+                GhostTextField(name, { name = it }, stringResource(R.string.company_name))
+                GhostTextField(owner, { owner = it }, stringResource(R.string.owner_name))
+                GhostTextField(mobile, { mobile = it }, stringResource(R.string.mobile),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Phone))
+                GhostTextField(addr1, { addr1 = it }, stringResource(R.string.address_line_1))
+                GhostTextField(addr2, { addr2 = it }, stringResource(R.string.address_line_2))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GhostTextField(city, { city = it }, stringResource(R.string.city), modifier = Modifier.weight(1f))
+                    GhostTextField(state, { state = it }, stringResource(R.string.state), modifier = Modifier.weight(1f))
+                }
+                GhostTextField(pin, { pin = it }, stringResource(R.string.pincode),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number))
-                GhostTextField(gst, { gst = it }, "GST Number")
+                GhostTextField(gst, { gst = it }, stringResource(R.string.gst_number))
             }
         },
         confirmButton = {
-            GoldButton("Save", onClick = {
+            GoldButton(stringResource(R.string.save), onClick = {
                 onSave(CompanyProfile(
                     companyName = name, ownerName = owner, mobileNumber = mobile,
                     address1 = addr1, address2 = addr2, city = city,
-                    state = state, pincode = pin, gstNumber = gst
+                    state = state, pincode = pin, gstNumber = gst,
+                    logoUri = logoUri
                 ))
             })
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = AuraColors.OnSurfaceVariant)
+                Text(stringResource(R.string.cancel), color = AuraColors.OnSurfaceVariant)
             }
         }
     )

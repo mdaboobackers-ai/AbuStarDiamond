@@ -9,8 +9,8 @@
     </style>
 
     <style name="Theme.GoldsmithBilling.SplashScreen" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">#131313</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/abu_star_logo</item>
-                <item name="postSplashScreenTheme">@style/Theme.GoldsmithBilling</item>
+        <item name="windowSplashScreenBackground">#10151A</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
+        <item name="postSplashScreenTheme">@style/Theme.GoldsmithBilling</item>
     </style>
 </resources>

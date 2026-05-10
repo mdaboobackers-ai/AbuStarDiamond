@@ -165,7 +165,7 @@ class DataImportViewModel @Inject constructor(
                     name = customerName,
                     phone = phone,
                     companyName = first.pick("shop", "shopname", "company", "companyname"),
-                    address = first.pick("address")
+                    address = first.importAddress()
                 ).let { customerDao.getCustomerById(customerDao.insertCustomer(it))!! }
             }
             val itemPreview = SpreadsheetImportUtil.parseBillItems(invoiceRows)
@@ -254,6 +254,10 @@ class DataImportViewModel @Inject constructor(
                 c.phone,
                 c.companyName,
                 c.address,
+                "",
+                "",
+                "",
+                "",
                 c.gstNumber,
                 c.email,
                 c.dob?.let(dateFormat::format).orEmpty(),
@@ -550,6 +554,17 @@ private fun ExportPinDialog(onDismiss: () -> Unit, onConfirm: (String, (String) 
 
 private fun Map<String, String>.pick(vararg keys: String): String =
     keys.firstNotNullOfOrNull { this[normalizeImportKey(it)]?.trim()?.takeIf(String::isNotBlank) }.orEmpty()
+
+private fun Map<String, String>.importAddress(): String {
+    val splitAddress = listOf(
+        pick("address_line_1", "addressline1", "address1", "street"),
+        pick("address_line_2", "addressline2", "address2", "area"),
+        pick("city", "town"),
+        pick("state"),
+        pick("pincode", "pin", "zipcode", "postalcode")
+    ).filter { it.isNotBlank() }.joinToString(", ")
+    return splitAddress.ifBlank { pick("address", "location") }
+}
 
 private fun normalizeImportKey(value: String): String =
     value.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }

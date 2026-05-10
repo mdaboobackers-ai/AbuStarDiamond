@@ -29,10 +29,21 @@
     <string name="new_bill">New Bill</string>
     <string name="add_customer">Add Customer</string>
     <string name="manual_backup">Manual Backup</string>
+    <string name="pending_payments">Pending Payments</string>
+    <string name="view">View</string>
     <string name="pure_gold_24k">Pure Gold 24K</string>
     <string name="standard_22k">Standard 22K</string>
     <string name="luxury_18k">Luxury 18K</string>
     <string name="per_10_grams">Per 10 Grams</string>
+    <string name="erp_control_center">ERP Control Center</string>
+    <string name="settlement_center">Settlement Center</string>
+    <string name="pending_customers">Pending Customers</string>
+    <string name="today_rate_value">Today Rate Value</string>
+    <string name="pure_gold_due">Pure Gold Due</string>
+    <string name="melting_queue">Melting Queue</string>
+    <string name="pending_test">Pending Test</string>
+    <string name="tested">Tested</string>
+    <string name="adjusted">Adjusted</string>
 
     <!-- Billing -->
     <string name="new_invoice">New Invoice</string>
@@ -74,6 +85,33 @@
     <string name="auto_lock">Auto-Lock</string>
     <string name="backup_sync">Backup &amp; Sync</string>
     <string name="auto_daily_backup">Auto Daily Backup</string>
+    <string name="data_management">Data Management</string>
+    <string name="bulk_import">Bulk Import</string>
+    <string name="bulk_import_subtitle">Import customers or billing from XLSX, CSV, or Google Sheets</string>
+    <string name="light_mode">Light Mode</string>
+    <string name="current_rates_per_gram">Current Rates (per gram)</string>
+    <string name="edit">Edit</string>
+    <string name="identity">Identity</string>
+    <string name="staff_prefix">Staff Prefix</string>
+    <string name="invoice_prefix">Invoice Prefix</string>
+    <string name="change_pin_subtitle">Update your 4-digit secure PIN</string>
+    <string name="biometric_active">Fingerprint unlock is active</string>
+    <string name="biometric_use">Use fingerprint to unlock</string>
+    <string name="auto_daily_backup_subtitle">Automatically backup to Google Drive</string>
+    <string name="last_backup">Last Backup</string>
+    <string name="never_backed_up">Never backed up</string>
+    <string name="change_logo">Change Logo</string>
+    <string name="company_name">Company Name</string>
+    <string name="owner_name">Owner Name</string>
+    <string name="mobile">Mobile</string>
+    <string name="address_line_1">Address Line 1</string>
+    <string name="address_line_2">Address Line 2</string>
+    <string name="city">City</string>
+    <string name="state">State</string>
+    <string name="pincode">Pincode</string>
+    <string name="gst_number">GST Number</string>
+    <string name="save">Save</string>
+    <string name="cancel">Cancel</string>
 
     <!-- Gold Rates -->
     <string name="gold_rates">Gold Rates</string>

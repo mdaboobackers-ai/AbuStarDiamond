@@ -44,7 +44,20 @@ data class ImportPreview<T>(
 
 object SpreadsheetImportUtil {
     fun customerTemplateRows(): List<List<String>> = listOf(
-        listOf("name", "phone", "shop_name", "address", "gst", "email", "dob", "anniversary")
+        listOf(
+            "name",
+            "phone",
+            "shop_name",
+            "address_line_1",
+            "address_line_2",
+            "city",
+            "state",
+            "pincode",
+            "gst",
+            "email",
+            "dob",
+            "anniversary"
+        )
     )
 
     fun billingTemplateRows(): List<List<String>> = listOf(
@@ -93,7 +106,7 @@ object SpreadsheetImportUtil {
                     name = name,
                     phone = phone,
                     companyName = row.pick("shopname", "companyname", "company", "businessname"),
-                    address = row.pick("address", "location"),
+                    address = customerAddress(row),
                     gstNumber = row.pick("gst", "gstnumber", "gstin"),
                     email = row.pick("email", "mail"),
                     dob = parseDate(row.pick("dob", "dateofbirth", "birthdate")),
@@ -228,6 +241,17 @@ object SpreadsheetImportUtil {
 
     private fun Map<String, String>.pick(vararg keys: String): String =
         keys.firstNotNullOfOrNull { this[normalizeHeader(it)]?.trim()?.takeIf(String::isNotBlank) }.orEmpty()
+
+    private fun customerAddress(row: Map<String, String>): String {
+        val splitAddress = listOf(
+            row.pick("addressline1", "address1", "addressone", "street"),
+            row.pick("addressline2", "address2", "addresstwo", "area"),
+            row.pick("city", "town"),
+            row.pick("state"),
+            row.pick("pincode", "pin", "zipcode", "postalcode")
+        ).filter { it.isNotBlank() }.joinToString(", ")
+        return splitAddress.ifBlank { row.pick("address", "location") }
+    }
 
     private fun normalizeHeader(value: String): String =
         value.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }

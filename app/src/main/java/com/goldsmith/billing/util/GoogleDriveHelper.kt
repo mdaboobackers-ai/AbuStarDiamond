@@ -30,6 +30,8 @@ object DriveBackupConfig {
         normalizeEmail(pickerEmail).ifBlank { normalizeEmail(lastSignedInEmail) }
     fun hasActiveDriveAccount(activeEmail: String?, savedEmail: String?): Boolean =
         normalizeEmail(activeEmail).isNotBlank()
+    fun displayEmail(activeEmail: String?, savedEmail: String?): String =
+        normalizeEmail(activeEmail).ifBlank { normalizeEmail(savedEmail) }
 }
 
 class GoogleDriveHelper(
@@ -42,6 +44,7 @@ class GoogleDriveHelper(
 
     private fun driveService(): Drive? {
         val account = signedInAccount ?: GoogleSignIn.getLastSignedInAccount(context) ?: return null
+        if (account.account == null) return null
         val credential = GoogleAccountCredential.usingOAuth2(context, Collections.singleton(DriveBackupConfig.SCOPE))
         credential.selectedAccount = account.account
         
@@ -88,5 +91,10 @@ class GoogleDriveHelper(
             .setOrderBy("modifiedTime desc")
             .execute()
         return result.files.firstOrNull()
+    }
+
+    suspend fun latestBackupModifiedTime(): Long? = withContext(Dispatchers.IO) {
+        findFile(DriveBackupConfig.REMOTE_FILE)?.modifiedTime?.value
+            ?: findFile(DriveBackupConfig.LEGACY_REMOTE_FILE)?.modifiedTime?.value
     }
 }

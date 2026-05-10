@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -27,12 +28,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.goldsmith.billing.R
 import com.goldsmith.billing.data.dao.*
+import com.goldsmith.billing.data.model.CompanyProfile
 import com.goldsmith.billing.data.model.PaymentStatus
 import com.goldsmith.billing.data.remote.MarketRateSnapshot
 import com.goldsmith.billing.data.repository.AppSettings
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.GoldCalc
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -49,7 +52,14 @@ data class DashboardUiState(
     val pendingAmount: Double = 0.0,
     val totalCustomers: Int = 0,
     val upcomingEvents: List<CustomerEvent> = emptyList(),
-    val marketRate: MarketRateSnapshot = MarketRateSnapshot(rate24K = 7245.0)
+    val companyProfile: CompanyProfile? = null,
+    val marketRate: MarketRateSnapshot = MarketRateSnapshot(rate24K = 7245.0),
+    val settlementCustomerCount: Int = 0,
+    val settlementGoldDue: Double = 0.0,
+    val settlementCashDueToday: Double = 0.0,
+    val meltingPendingCount: Int = 0,
+    val meltingTestedCount: Int = 0,
+    val meltingAdjustedCount: Int = 0
 )
 
 data class CustomerEvent(val customer: com.goldsmith.billing.data.model.Customer, val type: String, val date: Date)
@@ -59,6 +69,8 @@ class DashboardViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val invoiceDao: InvoiceDao,
     private val customerDao: CustomerDao,
+    private val companyProfileDao: CompanyProfileDao,
+    private val meltingDao: MeltingDao,
     private val goldRateService: com.goldsmith.billing.data.remote.GoldRateService
 ) : ViewModel() {
 
@@ -90,11 +102,37 @@ class DashboardViewModel @Inject constructor(
         invoiceDao.getTotalPendingAmount().map { it ?: 0.0 },
         customerDao.getCustomerCount(),
         customerDao.getAllCustomers(),
+        companyProfileDao.getProfile(),
+        invoiceDao.getAllInvoices(),
+        meltingDao.getAllMeltingRecords(),
         marketRate
     ) { values ->
         val allCustomers = values[7] as List<com.goldsmith.billing.data.model.Customer>
+        val settings = values[0] as AppSettings
+        val allInvoices = values[9] as List<com.goldsmith.billing.data.model.Invoice>
+        val meltingRecords = values[10] as List<com.goldsmith.billing.data.model.MeltingRecord>
+        val pendingInvoices = allInvoices.filter { it.paymentStatus != PaymentStatus.PAID && it.remainingBalance > 0.005 }
+        val pendingCustomerIds = pendingInvoices.map { it.customerId }.toSet()
+        val settlementGoldDue = pendingInvoices.sumOf { invoice ->
+            GoldCalc.pendingPureGold(
+                invoice.remainingBalance,
+                invoice.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K
+            ).coerceAtLeast(0.0)
+        }
+        val settlementCashDueToday = pendingInvoices.sumOf { invoice ->
+            GoldCalc.pendingCashAtRate(
+                invoice.remainingBalance,
+                invoice.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K,
+                settings.goldRate24K
+            ).coerceAtLeast(0.0)
+        }
+        val pendingMelting = meltingRecords.count { it.notes.contains("Auto-generated", ignoreCase = true) }
+        val adjustedMelting = meltingRecords.count {
+            kotlin.math.abs(it.rawWeightGrams - it.finalPureWeightGrams) > 0.005 &&
+                !it.notes.contains("Auto-generated", ignoreCase = true)
+        }
         DashboardUiState(
-            settings = values[0] as AppSettings,
+            settings = settings,
             todayInvoiceCount = (values[1] as Int),
             todaySalesAmount = (values[2] as Double),
             monthlySalesAmount = (values[3] as Double),
@@ -102,7 +140,14 @@ class DashboardViewModel @Inject constructor(
             pendingAmount = (values[5] as Double),
             totalCustomers = (values[6] as Int),
             upcomingEvents = calculateUpcomingEvents(allCustomers),
-            marketRate = values[8] as MarketRateSnapshot
+            companyProfile = values[8] as CompanyProfile?,
+            marketRate = values[11] as MarketRateSnapshot,
+            settlementCustomerCount = pendingCustomerIds.size,
+            settlementGoldDue = settlementGoldDue,
+            settlementCashDueToday = settlementCashDueToday,
+            meltingPendingCount = pendingMelting,
+            meltingTestedCount = (meltingRecords.size - pendingMelting).coerceAtLeast(0),
+            meltingAdjustedCount = adjustedMelting
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardUiState())
 
@@ -163,12 +208,19 @@ fun DashboardScreen(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         coil.compose.AsyncImage(
-                            model = R.drawable.abu_star_logo,
+                            model = state.companyProfile?.logoUri?.takeIf { it.isNotBlank() } ?: R.drawable.abu_star_logo,
                             contentDescription = null,
                             modifier = Modifier.size(32.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
                             contentScale = ContentScale.Fit
                         )
-                        Text("ABU STAR DIAMONDS", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, fontSize = 14.sp, letterSpacing = 2.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            state.companyProfile?.companyName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.app_name).uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuraColors.PrimaryContainer,
+                            fontSize = 14.sp,
+                            letterSpacing = 2.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 },
                 actions = {
@@ -196,7 +248,7 @@ fun DashboardScreen(
                 // ── Market Pulse ──────────────────────────────────────────────
                 item {
                     SectionHeader(
-                        title = "Market Pulse"
+                        title = stringResource(R.string.market_pulse)
                     )
                 }
                 item {
@@ -232,8 +284,8 @@ fun DashboardScreen(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        GoldRateCard("Pure Gold 24K", state.settings.goldRate24K, "up", Modifier.weight(1f))
-                        GoldRateCard("Standard 22K", state.settings.goldRate22K, "flat", Modifier.weight(1f))
+                        GoldRateCard(stringResource(R.string.pure_gold_24k), state.settings.goldRate24K, "up", Modifier.weight(1f))
+                        GoldRateCard(stringResource(R.string.standard_22k), state.settings.goldRate22K, "flat", Modifier.weight(1f))
                     }
                 }
 
@@ -271,12 +323,12 @@ fun DashboardScreen(
                             Spacer(Modifier.height(16.dp))
                             Divider(color = AuraColors.GlassWhite10)
                             Spacer(Modifier.height(16.dp))
-                            Text("Daily Ledger Summary", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                            Text(stringResource(R.string.daily_summary), style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
                             Spacer(Modifier.height(20.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                SummaryMetric("Total Amount", "₹${String.format("%,.0f", state.todaySalesAmount)}", isGold = true)
-                                SummaryMetric("Net Weight", "${String.format("%.2f", state.todayTotalWeight)}g", isGold = false)
-                                SummaryMetric("Invoices", "${state.todayInvoiceCount}", isGold = false)
+                                SummaryMetric(stringResource(R.string.total_amount), "₹${String.format("%,.0f", state.todaySalesAmount)}", isGold = true)
+                                SummaryMetric(stringResource(R.string.net_weight), "${String.format("%.2f", state.todayTotalWeight)}g", isGold = false)
+                                SummaryMetric(stringResource(R.string.invoices_issued), "${state.todayInvoiceCount}", isGold = false)
                             }
                         }
                     }
@@ -284,7 +336,7 @@ fun DashboardScreen(
 
                 // ... Quick actions continue ...
                 item {
-                    if (state.pendingAmount > 0) {
+                    if (state.pendingAmount > 0.005) {
                         GlassCard(
                             Modifier.fillMaxWidth(),
                             goldBorder = true
@@ -297,19 +349,47 @@ fun DashboardScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Icon(Icons.Default.AccountBalanceWallet, null, tint = AuraColors.Error, modifier = Modifier.size(24.dp))
                                     Column {
-                                        Text("Pending Payments", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant, letterSpacing = 1.sp)
+                                        Text(stringResource(R.string.pending_payments), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant, letterSpacing = 1.sp)
                                         Text("₹${String.format("%,.0f", state.pendingAmount)}", style = MaterialTheme.typography.titleLarge, color = AuraColors.Error, fontSize = 22.sp)
                                     }
                                 }
                                 TextButton(onClick = onHistory) {
-                                    Text("View", color = AuraColors.PrimaryContainer, style = MaterialTheme.typography.labelSmall)
+                                    Text(stringResource(R.string.view), color = AuraColors.PrimaryContainer, style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
                     }
                 }
 
-                item { SectionHeader("Operations") }
+                item { SectionHeader(stringResource(R.string.erp_control_center)) }
+                item {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ErpControlCard(
+                            title = stringResource(R.string.settlement_center),
+                            icon = Icons.Default.AccountBalanceWallet,
+                            primaryValue = "${state.settlementCustomerCount}",
+                            primaryLabel = stringResource(R.string.pending_customers),
+                            secondaryValue = "₹${String.format("%,.0f", state.settlementCashDueToday)}",
+                            secondaryLabel = stringResource(R.string.today_rate_value),
+                            footer = "${String.format("%.3f", state.settlementGoldDue)}g ${stringResource(R.string.pure_gold_due)}",
+                            alert = state.settlementCustomerCount > 0,
+                            modifier = Modifier.weight(1f)
+                        )
+                        ErpControlCard(
+                            title = stringResource(R.string.melting_queue),
+                            icon = Icons.Default.Whatshot,
+                            primaryValue = "${state.meltingPendingCount}",
+                            primaryLabel = stringResource(R.string.pending_test),
+                            secondaryValue = "${state.meltingTestedCount}",
+                            secondaryLabel = stringResource(R.string.tested),
+                            footer = "${state.meltingAdjustedCount} ${stringResource(R.string.adjusted)}",
+                            alert = state.meltingPendingCount > 0,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                item { SectionHeader(stringResource(R.string.operations)) }
                 item {
                     Button(
                         onClick = onNewBill,
@@ -319,28 +399,28 @@ fun DashboardScreen(
                     ) {
                         Icon(Icons.Default.AddShoppingCart, null, tint = AuraColors.OnPrimary)
                         Spacer(Modifier.width(12.dp))
-                        Text("NEW BILL", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 2.sp)
+                        Text(stringResource(R.string.new_bill).uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp, letterSpacing = 2.sp)
                         Spacer(Modifier.weight(1f))
                         Icon(Icons.Default.ArrowForward, null, tint = AuraColors.OnPrimary)
                     }
                 }
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        QuickActionCard("ADD CUSTOMER", Icons.Default.PersonAdd, onClick = onAddCustomer, modifier = Modifier.weight(1f))
-                        QuickActionCard("BACKUP", Icons.Default.CloudUpload, onClick = onBackup, modifier = Modifier.weight(1f))
+                        QuickActionCard(stringResource(R.string.add_customer).uppercase(), Icons.Default.PersonAdd, onClick = onAddCustomer, modifier = Modifier.weight(1f))
+                        QuickActionCard(stringResource(R.string.backup_to_drive).uppercase(), Icons.Default.CloudUpload, onClick = onBackup, modifier = Modifier.weight(1f))
                     }
                 }
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        QuickActionCard("HISTORY", Icons.Default.History, onClick = onHistory, modifier = Modifier.weight(1f))
-                        QuickActionCard("MELTING", Icons.Default.Whatshot, onClick = onMelting, modifier = Modifier.weight(1f))
+                        QuickActionCard(stringResource(R.string.nav_history).uppercase(), Icons.Default.History, onClick = onHistory, modifier = Modifier.weight(1f))
+                        QuickActionCard(stringResource(R.string.melting_module).uppercase(), Icons.Default.Whatshot, onClick = onMelting, modifier = Modifier.weight(1f))
                     }
                 }
                 item {
-                    QuickActionCard("ANALYTICS", Icons.Default.Analytics, onClick = onAnalytics, modifier = Modifier.fillMaxWidth())
+                    QuickActionCard(stringResource(R.string.analytics_dashboard).uppercase(), Icons.Default.Analytics, onClick = onAnalytics, modifier = Modifier.fillMaxWidth())
                 }
                 item {
-                    QuickActionCard("HALLMARK OCR", Icons.Default.DocumentScanner, onClick = onHallmarkScan, modifier = Modifier.fillMaxWidth())
+                    QuickActionCard(stringResource(R.string.hallmark_ocr).uppercase(), Icons.Default.DocumentScanner, onClick = onHallmarkScan, modifier = Modifier.fillMaxWidth())
                 }
                 item { Spacer(Modifier.height(80.dp)) }
             }
@@ -355,6 +435,64 @@ private fun SummaryMetric(label: String, value: String, isGold: Boolean) {
         Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), fontSize = 9.sp)
         Spacer(Modifier.height(4.dp))
         Text(value, style = MaterialTheme.typography.titleLarge, color = if (isGold) AuraColors.PrimaryContainer else AuraColors.OnSurface, fontSize = 20.sp)
+    }
+}
+
+@Composable
+private fun ErpControlCard(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    primaryValue: String,
+    primaryLabel: String,
+    secondaryValue: String,
+    secondaryLabel: String,
+    footer: String,
+    alert: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier
+            .height(156.dp)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        if (alert) AuraColors.PrimaryContainer.copy(alpha = 0.14f) else AuraColors.GlassWhite10,
+                        AuraColors.GlassWhite5
+                    )
+                ),
+                RoundedCornerShape(18.dp)
+            )
+            .border(
+                1.dp,
+                if (alert) AuraColors.PrimaryContainer.copy(alpha = 0.45f) else AuraColors.GlassBorder,
+                RoundedCornerShape(18.dp)
+            )
+            .padding(14.dp)
+    ) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier
+                        .size(32.dp)
+                        .background(AuraColors.SurfaceContainerLowest.copy(alpha = 0.45f), RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
+                }
+                Text(title.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface, fontSize = 9.sp, letterSpacing = 1.sp)
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+                Column {
+                    Text(primaryValue, style = MaterialTheme.typography.headlineMedium, color = if (alert) AuraColors.PrimaryContainer else AuraColors.OnSurface)
+                    Text(primaryLabel.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.55f), fontSize = 8.sp)
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(secondaryValue, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                    Text(secondaryLabel.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.55f), fontSize = 8.sp)
+                }
+            }
+            Text(footer, style = MaterialTheme.typography.bodyMedium, color = if (alert) AuraColors.PrimaryContainer else AuraColors.OnSurfaceVariant, fontWeight = FontWeight.Medium)
+        }
     }
 }
 

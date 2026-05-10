@@ -72,6 +72,10 @@ class BackupViewModel @Inject constructor(
         _backupState.value = BackupState.Error(message)
     }
 
+    fun clearSelectedAccount() = viewModelScope.launch {
+        settingsRepo.updateSelectedBackupEmail("")
+    }
+
     fun triggerManualSync(activeAccount: GoogleSignInAccount?, onNeedSignIn: () -> Unit) =
         triggerCloudOperation(BackupAction.Sync, activeAccount, onNeedSignIn) { manager ->
             manager.performSync()
@@ -146,7 +150,7 @@ fun BackupScreen(
     val backupState by viewModel.backupState.collectAsState()
     val sdf = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
     var activeAccount by remember { mutableStateOf(GoogleSignIn.getLastSignedInAccount(context)) }
-    val visibleAccount = activeAccount?.email ?: settings.selectedBackupEmail
+    val visibleAccount = DriveBackupConfig.displayEmail(activeAccount?.email, settings.selectedBackupEmail)
     var pendingCloudAction by remember { mutableStateOf<BackupAction?>(null) }
 
     BackHandler { onBack() }
@@ -174,7 +178,8 @@ fun BackupScreen(
                 null -> viewModel.resetState()
             }
         } else {
-            viewModel.showAccountError("No Google account selected")
+            pendingCloudAction = null
+            viewModel.resetState()
         }
     }
 
@@ -335,6 +340,12 @@ fun BackupScreen(
                             color = AuraColors.OnSurfaceVariant.copy(alpha = 0.45f),
                             fontSize = 10.sp
                         )
+                        Text(
+                            "Format: Version 3 portable encrypted backup",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuraColors.PrimaryContainer.copy(alpha = 0.7f),
+                            fontSize = 10.sp
+                        )
                         if (settings.lastBackupAccountEmail.isNotBlank()) {
                             Text(
                                 "Last backup account: ${settings.lastBackupAccountEmail}",
@@ -381,6 +392,22 @@ fun BackupScreen(
                             Icon(Icons.Default.ManageAccounts, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Change Google account", style = MaterialTheme.typography.labelSmall)
+                        }
+                        if (visibleAccount.isNotBlank()) {
+                            TextButton(
+                                onClick = {
+                                    pendingCloudAction = null
+                                    activeAccount = null
+                                    viewModel.clearSelectedAccount()
+                                    viewModel.resetState()
+                                },
+                                modifier = Modifier.align(Alignment.CenterHorizontally),
+                                enabled = backupState !is BackupState.Running
+                            ) {
+                                Icon(Icons.Default.LinkOff, null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Forget backup account", style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
                 }

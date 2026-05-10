@@ -5,14 +5,15 @@ import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Diamond
 import com.goldsmith.billing.R
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Backspace
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,7 +24,9 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.*
@@ -241,7 +244,7 @@ fun PinVerifyScreen(
 
     PinScaffold(
         title = if (!allowPinEntry) "Mobile Security" else "Enter Secure PIN",
-        subtitle = if (!allowPinEntry) "Confirm with fingerprint, face unlock, or phone lock" else "Biometric failed. Use PIN to continue",
+        subtitle = if (!allowPinEntry) "Confirm with mobile security or phone lock" else "Mobile security failed. Use PIN to continue",
         pinLength = pin.length,
         errorMsg = errorMsg,
         showBiometric = showMobileSecurity,
@@ -313,37 +316,14 @@ private fun PinScaffold(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.padding(bottom = 24.dp)
             ) {
-                Box(Modifier.size(88.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        progress = { 0.68f },
-                        modifier = Modifier.fillMaxSize().rotate(ringRotation),
-                        color = AuraColors.PrimaryContainer,
-                        trackColor = AuraColors.GlassWhite10,
-                        strokeWidth = 2.dp,
-                        strokeCap = StrokeCap.Round
+                Box(Modifier.size(132.dp), contentAlignment = Alignment.Center) {
+                    Image(
+                        painter = painterResource(R.drawable.abu_star_logo),
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
                     )
-                    Box(
-                        Modifier
-                            .size((54 * pulse).dp)
-                            .background(AuraColors.PrimaryContainer.copy(alpha = 0.12f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            if (showBiometric) Icons.Default.Fingerprint else Icons.Default.Diamond,
-                            null,
-                            tint = AuraColors.PrimaryContainer,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
                 }
-                Text(
-                    "ABU STAR DIAMONDS",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = AuraColors.PrimaryContainer,
-                    fontSize = 18.sp,
-                    letterSpacing = 4.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
             }
 
             // Glass container
@@ -390,7 +370,7 @@ private fun PinScaffold(
                                     .border(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f), CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(Icons.Default.Fingerprint, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(54.dp))
+                                Icon(Icons.Default.Security, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(50.dp))
                             }
                         }
                         Text(
@@ -417,7 +397,7 @@ private fun PinScaffold(
                             Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                                 if (showBiometric) {
                                     KeypadButton("", onClick = onBiometric) {
-                                        Icon(Icons.Default.Fingerprint, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(28.dp))
+                                        Icon(Icons.Default.Security, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(26.dp))
                                     }
                                 } else {
                                     Spacer(Modifier.size(68.dp))
@@ -437,7 +417,7 @@ private fun PinScaffold(
                             colors = ButtonDefaults.buttonColors(containerColor = AuraColors.PrimaryContainer, contentColor = AuraColors.OnPrimary),
                             shape = RoundedCornerShape(14.dp)
                         ) {
-                            Icon(Icons.Default.Fingerprint, null, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Security, null, modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(8.dp))
                             Text(if (showPinEntry) "TRY MOBILE SECURITY" else "OPEN MOBILE SECURITY", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
                         }
@@ -531,7 +511,7 @@ private fun showBiometric(
     biometricPrompt.authenticate(
         BiometricPrompt.PromptInfo.Builder()
             .setTitle("Verify Identity")
-            .setSubtitle("Use fingerprint or face unlock")
+            .setSubtitle("Use mobile security")
             .setNegativeButtonText("Use app PIN")
             .setAllowedAuthenticators(MobileSecurityAuth.loginPromptAuthenticators)
             .build()

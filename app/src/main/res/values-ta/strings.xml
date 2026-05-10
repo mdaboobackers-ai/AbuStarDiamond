@@ -29,10 +29,21 @@
     <string name="new_bill">புதிய பில்</string>
     <string name="add_customer">வாடிக்கையாளர் சேர்க்க</string>
     <string name="manual_backup">கைமுறை காப்புப்பிரதி</string>
+    <string name="pending_payments">நிலுவை கட்டணங்கள்</string>
+    <string name="view">பார்க்க</string>
     <string name="pure_gold_24k">தூய தங்கம் 24K</string>
     <string name="standard_22k">நிலையான 22K</string>
     <string name="luxury_18k">ஆடம்பர 18K</string>
     <string name="per_10_grams">10 கிராமுக்கு</string>
+    <string name="erp_control_center">ERP கட்டுப்பாட்டு மையம்</string>
+    <string name="settlement_center">செட்டில்மென்ட் மையம்</string>
+    <string name="pending_customers">நிலுவை வாடிக்கையாளர்கள்</string>
+    <string name="today_rate_value">இன்றைய விலை மதிப்பு</string>
+    <string name="pure_gold_due">தூய தங்க நிலுவை</string>
+    <string name="melting_queue">உருக்கு வரிசை</string>
+    <string name="pending_test">சோதனை நிலுவை</string>
+    <string name="tested">சோதிக்கப்பட்டது</string>
+    <string name="adjusted">சரிசெய்யப்பட்டது</string>
 
     <!-- Billing -->
     <string name="new_invoice">புதிய விலைப்பட்டியல்</string>
@@ -74,6 +85,33 @@
     <string name="auto_lock">தானியங்கி பூட்டு</string>
     <string name="backup_sync">காப்புப்பிரதி &amp; ஒத்திசைவு</string>
     <string name="auto_daily_backup">தினசரி தானியங்கி காப்புப்பிரதி</string>
+    <string name="data_management">தரவு மேலாண்மை</string>
+    <string name="bulk_import">மொத்த இறக்குமதி</string>
+    <string name="bulk_import_subtitle">XLSX, CSV அல்லது Google Sheets மூலம் வாடிக்கையாளர் / பில்லிங் இறக்குமதி</string>
+    <string name="light_mode">ஒளி முறை</string>
+    <string name="current_rates_per_gram">தற்போதைய விலைகள் (ஒரு கிராம்)</string>
+    <string name="edit">திருத்து</string>
+    <string name="identity">அடையாளம்</string>
+    <string name="staff_prefix">பணியாளர் முன்னொட்டு</string>
+    <string name="invoice_prefix">விலைப்பட்டியல் முன்னொட்டு</string>
+    <string name="change_pin_subtitle">உங்கள் 4 இலக்க பாதுகாப்பு PIN-ஐ மாற்றவும்</string>
+    <string name="biometric_active">கைரேகை திறப்பு செயலில் உள்ளது</string>
+    <string name="biometric_use">கைரேகை மூலம் திறக்கவும்</string>
+    <string name="auto_daily_backup_subtitle">Google Drive-க்கு தானாக காப்புப்பிரதி எடுக்கவும்</string>
+    <string name="last_backup">கடைசி காப்புப்பிரதி</string>
+    <string name="never_backed_up">இன்னும் காப்புப்பிரதி எடுக்கப்படவில்லை</string>
+    <string name="change_logo">லோகோ மாற்று</string>
+    <string name="company_name">நிறுவன பெயர்</string>
+    <string name="owner_name">உரிமையாளர் பெயர்</string>
+    <string name="mobile">மொபைல்</string>
+    <string name="address_line_1">முகவரி வரி 1</string>
+    <string name="address_line_2">முகவரி வரி 2</string>
+    <string name="city">நகரம்</string>
+    <string name="state">மாநிலம்</string>
+    <string name="pincode">அஞ்சல் குறியீடு</string>
+    <string name="gst_number">GST எண்</string>
+    <string name="save">சேமி</string>
+    <string name="cancel">ரத்து</string>
 
     <!-- Gold Rates -->
     <string name="gold_rates">தங்க விலைகள்</string>

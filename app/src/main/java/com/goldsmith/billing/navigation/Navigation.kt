@@ -181,7 +181,13 @@ fun GoldsmithNavGraph(
         }
 
         composable(Screen.Backup.route) {
-            BackupScreen(onBack = { navController.popBackStack() })
+            BackupScreen(onBack = {
+                if (!navController.popBackStack()) {
+                    navController.navigate(Screen.Dashboard.route) {
+                        popUpTo(Screen.Dashboard.route) { inclusive = true }
+                    }
+                }
+            })
         }
 
         composable(Screen.Analytics.route) {

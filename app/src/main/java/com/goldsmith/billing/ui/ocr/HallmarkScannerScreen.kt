@@ -1,5 +1,8 @@
 package com.goldsmith.billing.ui.ocr
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,10 +34,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.goldsmith.billing.ui.components.GlassCard
 import com.goldsmith.billing.ui.components.GoldButton
@@ -47,6 +53,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 fun HallmarkScannerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var imageUri by remember { mutableStateOf<Uri?>(null) }
+    var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var resultText by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Select a hallmark photo to scan.") }
 
@@ -54,7 +61,25 @@ fun HallmarkScannerScreen(onBack: () -> Unit) {
         imageUri = uri
         status = "Scanning..."
         resultText = ""
+        capturedBitmap = null
         val image = InputImage.fromFilePath(context, uri)
+        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            .process(image)
+            .addOnSuccessListener { text ->
+                resultText = text.text
+                status = detectHallmarkSummary(text.text)
+            }
+            .addOnFailureListener { error ->
+                status = error.message ?: "Unable to scan image"
+            }
+    }
+
+    fun scan(bitmap: Bitmap) {
+        capturedBitmap = bitmap
+        imageUri = null
+        status = "Scanning..."
+        resultText = ""
+        val image = InputImage.fromBitmap(bitmap, 0)
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
             .process(image)
             .addOnSuccessListener { text ->
@@ -68,6 +93,20 @@ fun HallmarkScannerScreen(onBack: () -> Unit) {
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let(::scan)
+    }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
+        bitmap?.let(::scan)
+    }
+    val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) camera.launch(null) else status = "Camera permission is required to scan directly."
+    }
+
+    fun openCamera() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            camera.launch(null)
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
     }
 
     Scaffold(
@@ -86,17 +125,46 @@ fun HallmarkScannerScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                GoldButton(
-                    text = "Pick Hallmark Photo",
-                    onClick = { picker.launch("image/*") },
-                    modifier = Modifier.fillMaxWidth(),
-                    icon = { Icon(Icons.Default.PhotoLibrary, null) }
-                )
+                GlassCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("How to test Hallmark OCR", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                        Text("1. Take a clear close-up photo of the hallmark stamp or HUID area.", color = AuraColors.OnSurfaceVariant)
+                        Text("2. Keep the jewellery still, use good light, and avoid glare.", color = AuraColors.OnSurfaceVariant)
+                        Text("3. Tap Pick Hallmark Photo and select the image from Gallery.", color = AuraColors.OnSurfaceVariant)
+                        Text("4. Check whether BIS, HUID, 916, 750, 585, 999, 22K, 18K, or 24K is detected.", color = AuraColors.OnSurfaceVariant)
+                    }
+                }
+            }
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    GoldButton(
+                        text = "Scan with Camera",
+                        onClick = ::openCamera,
+                        modifier = Modifier.fillMaxWidth(),
+                        icon = { Icon(Icons.Default.CameraAlt, null) }
+                    )
+                    GoldButton(
+                        text = "Pick Hallmark Photo",
+                        onClick = { picker.launch("image/*") },
+                        modifier = Modifier.fillMaxWidth(),
+                        icon = { Icon(Icons.Default.PhotoLibrary, null) }
+                    )
+                }
             }
             imageUri?.let { uri ->
                 item {
                     AsyncImage(
                         model = uri,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxWidth().height(220.dp),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+            }
+            capturedBitmap?.let { bitmap ->
+                item {
+                    androidx.compose.foundation.Image(
+                        bitmap = bitmap.asImageBitmap(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxWidth().height(220.dp),
                         contentScale = ContentScale.Crop

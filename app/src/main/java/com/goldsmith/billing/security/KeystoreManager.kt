@@ -11,7 +11,10 @@ import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 
 class KeystoreManager(private val context: Context) {
 
@@ -26,6 +29,9 @@ class KeystoreManager(private val context: Context) {
         private const val PREF_BIOMETRIC_ENABLED = "biometric_enabled"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val GCM_TAG_LENGTH = 128
+        private val PORTABLE_BACKUP_HEADER = byteArrayOf(0x41, 0x53, 0x44, 0x42, 0x33, 0x01) // ASDB3
+        private const val PORTABLE_BACKUP_SALT = "AbuStarDiamonds.GoogleDrive.PortableBackup.v3"
+        private const val PORTABLE_BACKUP_SECRET = "com.goldsmith.billing.drive.backup.mdaboobackers19"
     }
 
     private val masterKey = MasterKey.Builder(context)
@@ -146,6 +152,36 @@ class KeystoreManager(private val context: Context) {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH, iv))
         return cipher.doFinal(encrypted)
+    }
+
+    fun encryptPortableBackupBytes(data: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, portableBackupKey())
+        return PORTABLE_BACKUP_HEADER + cipher.iv.size.toByteArrayLE() + cipher.iv + cipher.doFinal(data)
+    }
+
+    fun decryptBackupBytes(data: ByteArray): ByteArray {
+        if (data.size > PORTABLE_BACKUP_HEADER.size + 4 && data.take(PORTABLE_BACKUP_HEADER.size).toByteArray().contentEquals(PORTABLE_BACKUP_HEADER)) {
+            val offset = PORTABLE_BACKUP_HEADER.size
+            val ivLen = data.sliceArray(offset until offset + 4).toIntLE()
+            val iv = data.sliceArray(offset + 4 until offset + 4 + ivLen)
+            val encrypted = data.sliceArray(offset + 4 + ivLen until data.size)
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, portableBackupKey(), GCMParameterSpec(GCM_TAG_LENGTH, iv))
+            return cipher.doFinal(encrypted)
+        }
+        return decryptBytes(data)
+    }
+
+    private fun portableBackupKey(): SecretKey {
+        val spec = PBEKeySpec(
+            PORTABLE_BACKUP_SECRET.toCharArray(),
+            PORTABLE_BACKUP_SALT.toByteArray(Charsets.UTF_8),
+            120_000,
+            256
+        )
+        val keyBytes = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        return SecretKeySpec(keyBytes, "AES")
     }
 
     private fun Int.toByteArrayLE(): ByteArray = byteArrayOf(

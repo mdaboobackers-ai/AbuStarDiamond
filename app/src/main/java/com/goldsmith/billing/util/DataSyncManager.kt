@@ -100,12 +100,12 @@ class DataSyncManager(
 
     private fun writeEncryptedPayload(file: File, payload: SyncPayload) {
         val jsonBytes = gson.toJson(payload).toByteArray(Charsets.UTF_8)
-        file.writeBytes(keystoreManager.encryptBytes(jsonBytes))
+        file.writeBytes(keystoreManager.encryptPortableBackupBytes(jsonBytes))
     }
 
     private fun readPayload(file: File): SyncPayload? {
         return try {
-            val decrypted = keystoreManager.decryptBytes(file.readBytes()).toString(Charsets.UTF_8)
+            val decrypted = keystoreManager.decryptBackupBytes(file.readBytes()).toString(Charsets.UTF_8)
             gson.fromJson(decrypted, SyncPayload::class.java)
         } catch (_: Exception) {
             runCatching { gson.fromJson(file.readText(), SyncPayload::class.java) }.getOrNull()
