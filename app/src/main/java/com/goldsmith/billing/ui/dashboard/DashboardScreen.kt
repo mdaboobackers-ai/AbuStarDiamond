@@ -28,6 +28,7 @@ import androidx.lifecycle.viewModelScope
 import com.goldsmith.billing.R
 import com.goldsmith.billing.data.dao.*
 import com.goldsmith.billing.data.model.PaymentStatus
+import com.goldsmith.billing.data.remote.MarketRateSnapshot
 import com.goldsmith.billing.data.repository.AppSettings
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
@@ -47,7 +48,8 @@ data class DashboardUiState(
     val todayTotalWeight: Double = 0.0,
     val pendingAmount: Double = 0.0,
     val totalCustomers: Int = 0,
-    val upcomingEvents: List<CustomerEvent> = emptyList()
+    val upcomingEvents: List<CustomerEvent> = emptyList(),
+    val marketRate: MarketRateSnapshot = MarketRateSnapshot(rate24K = 7245.0)
 )
 
 data class CustomerEvent(val customer: com.goldsmith.billing.data.model.Customer, val type: String, val date: Date)
@@ -77,6 +79,8 @@ class DashboardViewModel @Inject constructor(
         return cal.time
     }
 
+    private val marketRate = MutableStateFlow(MarketRateSnapshot(rate24K = 7245.0))
+
     val uiState: StateFlow<DashboardUiState> = combine(
         settingsRepo.settingsFlow,
         invoiceDao.getTodayInvoiceCount(todayStart),
@@ -85,7 +89,8 @@ class DashboardViewModel @Inject constructor(
         invoiceDao.getTodasTotalWeight(todayStart).map { it ?: 0.0 },
         invoiceDao.getTotalPendingAmount().map { it ?: 0.0 },
         customerDao.getCustomerCount(),
-        customerDao.getAllCustomers() 
+        customerDao.getAllCustomers(),
+        marketRate
     ) { values ->
         val allCustomers = values[7] as List<com.goldsmith.billing.data.model.Customer>
         DashboardUiState(
@@ -96,7 +101,8 @@ class DashboardViewModel @Inject constructor(
             todayTotalWeight = (values[4] as Double),
             pendingAmount = (values[5] as Double),
             totalCustomers = (values[6] as Int),
-            upcomingEvents = calculateUpcomingEvents(allCustomers)
+            upcomingEvents = calculateUpcomingEvents(allCustomers),
+            marketRate = values[8] as MarketRateSnapshot
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DashboardUiState())
 
@@ -123,6 +129,10 @@ class DashboardViewModel @Inject constructor(
     fun updateGoldRate(rate24K: Double) = viewModelScope.launch {
         settingsRepo.updateGoldRates(rate24K)
     }
+
+    fun refreshMarketRate(savedRate24K: Double) = viewModelScope.launch {
+        marketRate.value = goldRateService.fetchCurrentMarketSnapshot(savedRate24K)
+    }
 }
 
 // ─── Dashboard Screen ─────────────────────────────────────────────────────────
@@ -141,6 +151,10 @@ fun DashboardScreen(
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsState()
+
+    LaunchedEffect(state.settings.goldRate24K) {
+        viewModel.refreshMarketRate(state.settings.goldRate24K)
+    }
 
     Scaffold(
         containerColor = AuraColors.Background,
@@ -184,6 +198,42 @@ fun DashboardScreen(
                     SectionHeader(
                         title = "Market Pulse"
                     )
+                }
+                item {
+                    val location = listOf(state.marketRate.city, state.marketRate.state, state.marketRate.country)
+                        .filter { it.isNotBlank() }
+                        .joinToString(", ")
+                    GlassCard(Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Icon(Icons.Default.LocationOn, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
+                                Column {
+                                    Text(
+                                        if (location.isNotBlank()) location else "Tamil Nadu, India",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = AuraColors.OnSurface,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        "${state.marketRate.sourceLabel} - manual rates stay saved",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = AuraColors.OnSurfaceVariant,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                            Text(
+                                "₹${String.format("%.2f", state.marketRate.rate24K)}",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = AuraColors.PrimaryContainer,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
                 item {
                     Row(

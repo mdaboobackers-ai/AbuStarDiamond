@@ -68,6 +68,49 @@ class DataSyncManager(private val context: Context) {
         }
     }
 
+    suspend fun performBackup(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val localFile = File(context.cacheDir, "local_sync.json")
+            localFile.writeText(gson.toJson(buildPayload()))
+            driveHelper.uploadFile(localFile, "goldsmith_sync_v2.json") != null
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun performRestore(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val remoteFile = File(context.cacheDir, "remote_sync.json")
+            if (!driveHelper.downloadFile("goldsmith_sync_v2.json", remoteFile)) return@withContext false
+            val remotePayload = gson.fromJson(remoteFile.readText(), SyncPayload::class.java)
+            smartMerge(remotePayload)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    private suspend fun buildPayload(): SyncPayload {
+        val allInvoices = db.invoiceDao().getAllInvoices().first()
+        val allCustomers = db.customerDao().getAllCustomers().first()
+        val allMelting = db.meltingDao().getAllMeltingRecords().first()
+        val allRates = db.goldRateDao().getRateHistory().first()
+        val allPayments = db.invoicePaymentDao().getAllPayments().first()
+
+        return SyncPayload(
+            customers = allCustomers,
+            invoices = allInvoices,
+            billItems = fetchAllBillItems(allInvoices),
+            invoicePayments = allPayments,
+            meltingRecords = allMelting,
+            goldRates = allRates,
+            companyProfile = db.companyProfileDao().getProfileSync(),
+            deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+        )
+    }
+
     private suspend fun fetchAllBillItems(invoices: List<Invoice>): List<BillItem> {
         val items = mutableListOf<BillItem>()
         invoices.forEach { 

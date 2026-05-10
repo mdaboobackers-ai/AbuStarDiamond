@@ -87,4 +87,12 @@
     <string name="raw_weight">Raw Weight</string>
     <string name="final_pure_weight">Final Pure Weight</string>
     <string name="old_jewellery_exchange">Old Jewellery Exchange</string>
+    <string name="analytics_dashboard">Analytics Dashboard</string>
+    <string name="hallmark_ocr">Hallmark OCR</string>
+    <string name="backup_to_drive">Backup to Drive</string>
+    <string name="restore_from_drive">Restore from Drive</string>
+    <string name="select_thermal_printer">Select thermal printer</string>
+    <string name="payment_history">Payment History</string>
+    <string name="attachments">Attachments</string>
+    <string name="delete_confirmation">Delete?</string>
 </resources>

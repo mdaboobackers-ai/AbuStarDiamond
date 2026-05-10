@@ -19,10 +19,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.goldsmith.billing.data.dao.BillItemDao
 import com.goldsmith.billing.data.dao.CustomerDao
 import com.goldsmith.billing.data.dao.InvoiceDao
@@ -115,24 +123,36 @@ class HistoryViewModel @Inject constructor(
     fun getPayments(invoiceId: Long): Flow<List<InvoicePayment>> =
         invoicePaymentDao.getPaymentsForInvoice(invoiceId)
 
-    fun printInvoice(context: android.content.Context, invoice: Invoice, items: List<BillItem>) {
-        // This requires paired Bluetooth device. For simplicity, we search for first bonded printer
-        val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
-        val printer = adapter?.bondedDevices?.firstOrNull { it.name.lowercase().contains("printer") }
-        if (printer != null) {
-            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                com.goldsmith.billing.util.BluetoothPrinter.printInvoice(context, printer, invoice, items, profile.value)
+    @SuppressLint("MissingPermission")
+    fun bondedPrinters(context: android.content.Context): List<BluetoothDevice> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) return emptyList()
+
+        val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return emptyList()
+        return adapter.bondedDevices
+            .sortedWith(compareByDescending<BluetoothDevice> { device ->
+                runCatching { device.name.orEmpty().contains("printer", ignoreCase = true) }.getOrDefault(false)
+            }.thenBy { device -> runCatching { device.name.orEmpty() }.getOrDefault("") })
+    }
+
+    fun printInvoice(context: android.content.Context, device: BluetoothDevice, invoice: Invoice, items: List<BillItem>, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val printed = com.goldsmith.billing.util.BluetoothPrinter.printInvoice(context, device, invoice, items, profile.value)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                onResult(printed)
             }
         }
     }
 
-    fun addPayment(invoice: Invoice, amount: Double, gold: Double, karat: Int, mode: String) = viewModelScope.launch {
+    fun addPayment(invoice: Invoice, amount: Double, gold: Double, karat: Int, mode: String, attachmentUris: List<String>) = viewModelScope.launch {
         val payment = InvoicePayment(
             invoiceId = invoice.id,
             amount = amount,
             goldGrams = gold,
             goldKarat = karat,
-            paymentMode = mode
+            paymentMode = mode,
+            attachmentUris = attachmentUris
         )
         invoicePaymentDao.insertPayment(payment)
 
@@ -158,12 +178,13 @@ class HistoryViewModel @Inject constructor(
         }
     }
 
-    fun updatePayment(invoice: Invoice, payment: InvoicePayment, amount: Double, gold: Double, karat: Int, mode: String) = viewModelScope.launch {
+    fun updatePayment(invoice: Invoice, payment: InvoicePayment, amount: Double, gold: Double, karat: Int, mode: String, attachmentUris: List<String>) = viewModelScope.launch {
         val updatedPayment = payment.copy(
             amount = if (mode == "CASH") amount else 0.0,
             goldGrams = if (mode == "GOLD") gold else 0.0,
             goldKarat = karat,
             paymentMode = mode,
+            attachmentUris = attachmentUris,
             date = Date()
         )
         invoicePaymentDao.updatePayment(updatedPayment)
@@ -190,6 +211,10 @@ class HistoryViewModel @Inject constructor(
                 updatedAt = Date()
             ))
         }
+    }
+
+    fun updatePaymentAttachments(payment: InvoicePayment, attachmentUris: List<String>) = viewModelScope.launch {
+        invoicePaymentDao.updatePayment(payment.copy(attachmentUris = attachmentUris, date = Date()))
     }
 
     fun deletePayment(invoice: Invoice, payment: InvoicePayment) = viewModelScope.launch {
@@ -471,6 +496,17 @@ fun InvoiceDetailScreen(
     var showPaymentDialog by remember { mutableStateOf(false) }
     var editingPayment by remember { mutableStateOf<InvoicePayment?>(null) }
     var deletePaymentTarget by remember { mutableStateOf<InvoicePayment?>(null) }
+    var showPrinterDialog by remember { mutableStateOf(false) }
+    var pairedPrinters by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
+    var printMessage by remember { mutableStateOf<String?>(null) }
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            pairedPrinters = viewModel.bondedPrinters(context)
+            showPrinterDialog = true
+        } else {
+            printMessage = "Bluetooth permission is required to print"
+        }
+    }
 
     LaunchedEffect(invoiceId) {
         viewModel.getInvoiceById(invoiceId).collect {
@@ -505,6 +541,17 @@ fun InvoiceDetailScreen(
         }
     }
 
+    fun handlePrint() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) {
+            bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            return
+        }
+        pairedPrinters = viewModel.bondedPrinters(context)
+        showPrinterDialog = true
+    }
+
     Scaffold(
         containerColor = AuraColors.Background,
         topBar = {
@@ -512,6 +559,7 @@ fun InvoiceDetailScreen(
                 title = { Text(invoice?.invoiceNumber ?: "Invoice", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, letterSpacing = 2.sp) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = AuraColors.PrimaryContainer) } },
                 actions = {
+                    IconButton(onClick = ::handlePrint) { Icon(Icons.Default.Print, null, tint = AuraColors.PrimaryContainer) }
                     IconButton(onClick = ::handleShare) { Icon(Icons.Default.Share, null, tint = AuraColors.PrimaryContainer) }
                     IconButton(onClick = ::handlePdf) { Icon(Icons.Default.PictureAsPdf, null, tint = AuraColors.PrimaryContainer) }
                 },
@@ -531,6 +579,10 @@ fun InvoiceDetailScreen(
         invoice?.let { inv ->
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
+                    printMessage?.let {
+                        Text(it, color = AuraColors.PrimaryContainer, style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.height(8.dp))
+                    }
                     GlassCard(Modifier.fillMaxWidth(), goldBorder = true) {
                         Column(Modifier.padding(20.dp)) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -592,19 +644,47 @@ fun InvoiceDetailScreen(
                     item { Text("PAYMENT HISTORY", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), letterSpacing = 2.sp, modifier = Modifier.padding(vertical = 4.dp)) }
                     items(payments) { p ->
                         GlassCard(Modifier.fillMaxWidth()) {
-                            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                Column {
-                                    Text(if (p.paymentMode == "CASH") "Cash Payment" else "Gold Payment (${p.goldKarat}K)", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface)
-                                    Text(sdf.format(p.date), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant)
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(if (p.paymentMode == "CASH") "₹${String.format("%,.0f", p.amount)}" else "${String.format("%.3f", p.goldGrams)}g",
-                                        style = MaterialTheme.typography.titleMedium, color = AuraColors.Primary)
-                                    IconButton(onClick = { editingPayment = p }) {
-                                        Icon(Icons.Default.Edit, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column {
+                                        Text(if (p.paymentMode == "CASH") "Cash Payment" else "Gold Payment (${p.goldKarat}K)", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface)
+                                        Text(sdf.format(p.date), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant)
                                     }
-                                    IconButton(onClick = { deletePaymentTarget = p }) {
-                                        Icon(Icons.Default.Delete, null, tint = AuraColors.Error, modifier = Modifier.size(18.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(if (p.paymentMode == "CASH") "₹${String.format("%,.0f", p.amount)}" else "${String.format("%.3f", p.goldGrams)}g",
+                                            style = MaterialTheme.typography.titleMedium, color = AuraColors.Primary)
+                                        IconButton(onClick = { editingPayment = p }) {
+                                            Icon(Icons.Default.Edit, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
+                                        }
+                                        IconButton(onClick = { deletePaymentTarget = p }) {
+                                            Icon(Icons.Default.Delete, null, tint = AuraColors.Error, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                                if (p.attachmentUris.isNotEmpty()) {
+                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        items(p.attachmentUris) { uri ->
+                                            AssistChip(
+                                                onClick = {
+                                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                        setData(android.net.Uri.parse(uri))
+                                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                    }
+                                                    runCatching { context.startActivity(intent) }
+                                                },
+                                                label = { Text("Attachment") },
+                                                leadingIcon = { Icon(Icons.Default.AttachFile, null, modifier = Modifier.size(16.dp)) },
+                                                trailingIcon = {
+                                                    Icon(
+                                                        Icons.Default.Close,
+                                                        null,
+                                                        modifier = Modifier.size(16.dp).clickable {
+                                                            viewModel.updatePaymentAttachments(p, p.attachmentUris - uri)
+                                                        }
+                                                    )
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -637,8 +717,8 @@ fun InvoiceDetailScreen(
         AddPaymentDialog(
             invoice = invoice!!,
             onDismiss = { showPaymentDialog = false },
-            onSave = { amt, gold, karat, mode ->
-                viewModel.addPayment(invoice!!, amt, gold, karat, mode)
+            onSave = { amt, gold, karat, mode, attachments ->
+                viewModel.addPayment(invoice!!, amt, gold, karat, mode, attachments)
                 showPaymentDialog = false
             }
         )
@@ -649,8 +729,8 @@ fun InvoiceDetailScreen(
             invoice = invoice!!,
             existing = editingPayment,
             onDismiss = { editingPayment = null },
-            onSave = { amt, gold, karat, mode ->
-                viewModel.updatePayment(invoice!!, editingPayment!!, amt, gold, karat, mode)
+            onSave = { amt, gold, karat, mode, attachments ->
+                viewModel.updatePayment(invoice!!, editingPayment!!, amt, gold, karat, mode, attachments)
                 editingPayment = null
             }
         )
@@ -671,15 +751,58 @@ fun InvoiceDetailScreen(
             dismissButton = { TextButton(onClick = { deletePaymentTarget = null }) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }
         )
     }
+
+    if (showPrinterDialog && invoice != null) {
+        AlertDialog(
+            onDismissRequest = { showPrinterDialog = false },
+            containerColor = AuraColors.SurfaceContainerHigh,
+            title = { Text("Select thermal printer", color = AuraColors.OnSurface) },
+            text = {
+                if (pairedPrinters.isEmpty()) {
+                    Text("No paired Bluetooth printers found. Pair the printer in Android Bluetooth settings first.", color = AuraColors.OnSurfaceVariant)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        pairedPrinters.forEach { device ->
+                            val deviceName = runCatching { device.name }.getOrNull().orEmpty().ifEmpty { "Bluetooth printer" }
+                            OutlinedButton(
+                                onClick = {
+                                    val inv = invoice ?: return@OutlinedButton
+                                    printMessage = "Printing to $deviceName..."
+                                    showPrinterDialog = false
+                                    viewModel.printInvoice(context, device, inv, billItems) { printed ->
+                                        printMessage = if (printed) "Printed on $deviceName" else "Print failed. Check printer power and pairing."
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Print, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(deviceName)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPrinterDialog = false }) {
+                    Text("Close", color = AuraColors.PrimaryContainer)
+                }
+            }
+        )
+    }
 }
 
 @Composable
-fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, onDismiss: () -> Unit, onSave: (Double, Double, Int, String) -> Unit) {
+fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, onDismiss: () -> Unit, onSave: (Double, Double, Int, String, List<String>) -> Unit) {
     var mode by remember { mutableStateOf(existing?.paymentMode ?: "CASH") }
     var amount by remember { mutableStateOf(existing?.amount?.takeIf { it > 0 }?.toString() ?: "") }
     var gold by remember { mutableStateOf(existing?.goldGrams?.takeIf { it > 0 }?.toString() ?: "") }
     var karat by remember { mutableIntStateOf(existing?.goldKarat ?: 22) }
     var error by remember { mutableStateOf("") }
+    var attachments by remember { mutableStateOf(existing?.attachmentUris ?: emptyList()) }
+    val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        attachments = (attachments + uris.map { it.toString() }).distinct()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -702,6 +825,23 @@ fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, onDismi
                         }
                     }
                 }
+                OutlinedButton(onClick = { attachmentPicker.launch("*/*") }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.AttachFile, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add attachments")
+                }
+                if (attachments.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        attachments.forEachIndexed { index, uri ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Attachment ${index + 1}", color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                                IconButton(onClick = { attachments = attachments - uri }) {
+                                    Icon(Icons.Default.Delete, null, tint = AuraColors.Error, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
                 if (error.isNotEmpty()) Text(error, color = AuraColors.Error, style = MaterialTheme.typography.bodyMedium)
             }
         },
@@ -712,7 +852,7 @@ fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, onDismi
                 when {
                     mode == "CASH" && (amountValue == null || amountValue <= 0.0) -> error = "Enter valid number"
                     mode == "GOLD" && (goldValue == null || goldValue <= 0.0) -> error = "Enter valid number"
-                    else -> onSave(amountValue ?: 0.0, goldValue ?: 0.0, karat, mode)
+                    else -> onSave(amountValue ?: 0.0, goldValue ?: 0.0, karat, mode, attachments)
                 }
             })
         },

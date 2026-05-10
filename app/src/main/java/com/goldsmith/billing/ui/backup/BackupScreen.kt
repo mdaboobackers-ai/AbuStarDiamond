@@ -36,8 +36,8 @@ import javax.inject.Inject
 
 sealed class BackupState {
     object Idle : BackupState()
-    object Running : BackupState()
-    data class Success(val timestamp: Long) : BackupState()
+    data class Running(val operation: String) : BackupState()
+    data class Success(val timestamp: Long, val operation: String) : BackupState()
     data class Error(val message: String) : BackupState()
 }
 
@@ -56,8 +56,20 @@ class BackupViewModel @Inject constructor(
 
     private val syncManager = com.goldsmith.billing.util.DataSyncManager(context)
 
-    fun triggerManualSync(onNeedSignIn: () -> Unit) = viewModelScope.launch {
-        _backupState.value = BackupState.Running
+    fun triggerManualSync(onNeedSignIn: () -> Unit) = triggerCloudOperation("Sync", onNeedSignIn) {
+        syncManager.performSync()
+    }
+
+    fun triggerBackup(onNeedSignIn: () -> Unit) = triggerCloudOperation("Backup", onNeedSignIn) {
+        syncManager.performBackup()
+    }
+
+    fun triggerRestore(onNeedSignIn: () -> Unit) = triggerCloudOperation("Restore", onNeedSignIn) {
+        syncManager.performRestore()
+    }
+
+    private fun triggerCloudOperation(operation: String, onNeedSignIn: () -> Unit, action: suspend () -> Boolean) = viewModelScope.launch {
+        _backupState.value = BackupState.Running(operation)
         try {
             val account = com.google.android.gms.auth.api.signin.GoogleSignIn.getLastSignedInAccount(context)
             if (account == null) {
@@ -66,16 +78,16 @@ class BackupViewModel @Inject constructor(
                 return@launch
             }
 
-            val success = syncManager.performSync()
+            val success = action()
             if (success) {
                 val now = System.currentTimeMillis()
-                settingsRepo.updateLastBackupTime(now)
-                _backupState.value = BackupState.Success(now)
+                if (operation != "Restore") settingsRepo.updateLastBackupTime(now)
+                _backupState.value = BackupState.Success(now, operation)
             } else {
-                _backupState.value = BackupState.Error("Sync failed - check connection")
+                _backupState.value = BackupState.Error("$operation failed - check Google Drive access")
             }
         } catch (e: Exception) {
-            _backupState.value = BackupState.Error(e.message ?: "Sync failed")
+            _backupState.value = BackupState.Error(e.message ?: "$operation failed")
         }
     }
 
@@ -97,12 +109,17 @@ fun BackupScreen(
     val backupState by viewModel.backupState.collectAsState()
     val sdf = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
     val signedInAccount = GoogleSignIn.getLastSignedInAccount(context)
+    var pendingCloudAction by remember { mutableStateOf("backup") }
 
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            viewModel.triggerManualSync {}
+            when (pendingCloudAction) {
+                "restore" -> viewModel.triggerRestore {}
+                "sync" -> viewModel.triggerManualSync {}
+                else -> viewModel.triggerBackup {}
+            }
         }
     }
 
@@ -176,8 +193,8 @@ fun BackupScreen(
                                         is BackupState.Idle -> if (settings.lastBackupTime > 0)
                                             "Last: ${sdf.format(Date(settings.lastBackupTime))}"
                                         else "Never backed up"
-                                        is BackupState.Running -> "Backing up..."
-                                        is BackupState.Success -> "Completed: ${sdf.format(Date((backupState as BackupState.Success).timestamp))}"
+                                        is BackupState.Running -> "${(backupState as BackupState.Running).operation} running..."
+                                        is BackupState.Success -> "${(backupState as BackupState.Success).operation} completed: ${sdf.format(Date((backupState as BackupState.Success).timestamp))}"
                                         is BackupState.Error -> "Error: ${(backupState as BackupState.Error).message}"
                                     },
                                     style = MaterialTheme.typography.bodyMedium,
@@ -241,16 +258,35 @@ fun BackupScreen(
                         Spacer(Modifier.height(12.dp))
 
                         GoldButton(
-                            text = if (backupState is BackupState.Running) "Syncing..." else "Sync with Cloud",
+                            text = if (backupState is BackupState.Running) "Backing up..." else "BACKUP TO DRIVE",
                             onClick = {
                                 val account = GoogleSignIn.getLastSignedInAccount(context)
+                                pendingCloudAction = "backup"
                                 if (account == null) launchGoogleSignIn()
-                                else viewModel.triggerManualSync { launchGoogleSignIn() }
+                                else viewModel.triggerBackup { launchGoogleSignIn() }
                             },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = backupState !is BackupState.Running,
-                            icon = { Icon(Icons.Default.CloudSync, null, modifier = Modifier.size(18.dp)) }
+                            icon = { Icon(Icons.Default.CloudUpload, null, modifier = Modifier.size(18.dp)) }
                         )
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = {
+                                val account = GoogleSignIn.getLastSignedInAccount(context)
+                                pendingCloudAction = "sync"
+                                if (account == null) launchGoogleSignIn()
+                                else viewModel.triggerManualSync { launchGoogleSignIn() }
+                            },
+                            modifier = Modifier.fillMaxWidth().height(46.dp),
+                            enabled = backupState !is BackupState.Running,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.OnSurface),
+                            border = BorderStroke(1.dp, AuraColors.GlassWhite20),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.CloudSync, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("FULL MERGE SYNC", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+                        }
                     }
                 }
             }
@@ -335,8 +371,9 @@ fun BackupScreen(
                         OutlinedButton(
                             onClick = {
                                 val account = GoogleSignIn.getLastSignedInAccount(context)
+                                pendingCloudAction = "restore"
                                 if (account == null) launchGoogleSignIn()
-                                else viewModel.triggerManualSync { launchGoogleSignIn() }
+                                else viewModel.triggerRestore { launchGoogleSignIn() }
                             },
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.OnSurface),

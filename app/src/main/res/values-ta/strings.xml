@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">லூப் &amp; லெட்ஜர்</string>
-    <string name="app_subtitle">தங்கச்சாலை பில்லிங் தொகுப்பு</string>
+    <string name="app_name">அபு ஸ்டார் டையமண்ட்ஸ்</string>
+    <string name="app_subtitle">நம்பிக்கை · தூய்மை · அழகு</string>
 
     <!-- Auth -->
     <string name="enter_pin">பாதுகாப்பு PIN உள்ளிடவும்</string>
@@ -87,4 +87,12 @@
     <string name="raw_weight">மூல எடை</string>
     <string name="final_pure_weight">இறுதி தூய எடை</string>
     <string name="old_jewellery_exchange">பழைய நகை மாற்றம்</string>
+    <string name="analytics_dashboard">பகுப்பாய்வு டாஷ்போர்டு</string>
+    <string name="hallmark_ocr">ஹால்மார்க் OCR</string>
+    <string name="backup_to_drive">Drive-க்கு காப்புப்பிரதி</string>
+    <string name="restore_from_drive">Drive-இலிருந்து மீட்டெடு</string>
+    <string name="select_thermal_printer">தெர்மல் பிரிண்டர் தேர்வு</string>
+    <string name="payment_history">கட்டண வரலாறு</string>
+    <string name="attachments">இணைப்புகள்</string>
+    <string name="delete_confirmation">நீக்க வேண்டுமா?</string>
 </resources>

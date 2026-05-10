@@ -1,9 +1,11 @@
 # Gradle
 .gradle/
+.kotlin/
 build/
 
 # Android
 app/build/
+.android-sdk/
 
 # Local config
 local.properties
