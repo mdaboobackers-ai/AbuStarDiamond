@@ -4,6 +4,7 @@ import android.content.Context
 import com.goldsmith.billing.data.db.GoldsmithDatabase
 import com.goldsmith.billing.data.model.*
 import com.goldsmith.billing.security.KeystoreManager
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
@@ -23,12 +24,15 @@ data class SyncPayload(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-class DataSyncManager(private val context: Context) {
+class DataSyncManager(
+    private val context: Context,
+    signedInAccount: GoogleSignInAccount? = null
+) {
     private val db = GoldsmithDatabase.getDatabase(context)
     private val gson: Gson = GsonBuilder()
         .setDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
         .create()
-    private val driveHelper = GoogleDriveHelper(context)
+    private val driveHelper = GoogleDriveHelper(context, signedInAccount)
     private val keystoreManager = KeystoreManager(context)
 
     suspend fun performSync(): Boolean = withContext(Dispatchers.IO) {

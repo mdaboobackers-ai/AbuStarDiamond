@@ -134,7 +134,7 @@ class BillingViewModel @Inject constructor(
 
     fun totalAmount(rate: Double) = items.sumOf { it.amount(rate) }
     fun totalWeight() = items.sumOf { it.netW }
-    fun totalFineGold(rate: Double) = GoldCalc.roundGrams(items.sumOf { it.eqGrams(rate) })
+    fun totalFineGold(rate: Double) = GoldCalc.subtotalEquivalentGrams(items.map { it.eqGrams(rate) })
     fun totalGramsWithMaking(rate: Double) = totalFineGold(rate)
     fun totalGoldPaidValue(rate: Double) = goldPayments.sumOf { GoldCalc.goldPaymentValue(it.gramsValue, it.karat, rate) }
     fun totalGoldPaidPure() = goldPayments.sumOf { it.pureGold }
@@ -307,7 +307,7 @@ fun BillingScreen(
                     settings = settings,
                     viewModel = viewModel,
                     step = viewModel.currentStep,
-                    onNext = { if (viewModel.currentStep < 2) viewModel.currentStep++ else viewModel.saveInvoice(onInvoiceCreated) },
+                    onNext = { if (viewModel.currentStep < 3) viewModel.currentStep++ else viewModel.saveInvoice(onInvoiceCreated) },
                     onBack = { if (viewModel.currentStep > 0) viewModel.currentStep-- }
                 )
             }
@@ -323,6 +323,7 @@ fun BillingScreen(
                 0 -> CustomerStep(viewModel) { viewModel.currentStep = 1 }
                 1 -> ItemsStep(viewModel, settings.goldRate24K)
                 2 -> PaymentStep(viewModel, settings)
+                3 -> ReviewStep(viewModel, settings)
             }
         }
     }
@@ -335,7 +336,7 @@ private fun StepIndicator(current: Int, onStepClick: (Int) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center
     ) {
-        listOf("Customer", "Inventory", "Payment").forEachIndexed { idx, label ->
+        listOf("Customer", "Inventory", "Payment", "Review").forEachIndexed { idx, label ->
             val active = idx == current
             val done = idx < current
 
@@ -355,7 +356,7 @@ private fun StepIndicator(current: Int, onStepClick: (Int) -> Unit) {
                 Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = if (active) AuraColors.PrimaryContainer else AuraColors.OnSurface.copy(alpha = 0.4f), fontSize = 9.sp, letterSpacing = 1.sp)
             }
 
-            if (idx < 2) {
+            if (idx < 3) {
                 Box(Modifier.weight(1f).height(1.dp).background(AuraColors.GlassWhite10).padding(bottom = 20.dp))
             }
         }
@@ -779,7 +780,7 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
                     SummaryRow("Pure Gold (24K)", "${String.format("%.3f", viewModel.totalFineGold(settings.goldRate24K))}g")
                     SummaryRow("91.6 Gold", "${String.format("%.3f", GoldCalc.equivalent916(viewModel.totalFineGold(settings.goldRate24K)))}g")
                     HorizontalDivider(color = AuraColors.GlassWhite10)
-                    SummaryRow("Sub Total Grams", "${String.format("%.3f", viewModel.totalWeight())}g")
+                    SummaryRow("Sub Total Grams", "${String.format("%.3f", viewModel.totalFineGold(settings.goldRate24K))}g")
                     SummaryRow("Amount Subtotal", "₹${String.format("%,.2f", subtotal)}")
                     SummaryRow("GST (${settings.gstPercent}%)", "₹${String.format("%,.2f", gstAmount)}")
                     HorizontalDivider(color = AuraColors.PrimaryContainer.copy(alpha = 0.3f))
@@ -891,6 +892,70 @@ private fun GoldPaymentRow(
 }
 
 @Composable
+private fun ReviewStep(viewModel: BillingViewModel, settings: com.goldsmith.billing.data.repository.AppSettings) {
+    val subtotal = viewModel.totalAmount(settings.goldRate24K)
+    val gstAmount = subtotal * settings.gstPercent / 100.0
+    val total = subtotal + gstAmount
+    val cashP = viewModel.cashPaid.toDoubleOrNull() ?: 0.0
+    val goldPaidPure = viewModel.totalGoldPaidPure()
+    val goldPaidValue = viewModel.totalGoldPaidValue(settings.goldRate24K)
+    val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0
+    val remaining = GoldCalc.roundMoney(total - cashP - goldPaidValue - previousBalance)
+    val remainingGold = if (settings.goldRate24K > 0) GoldCalc.roundGrams(remaining.coerceAtLeast(0.0) / settings.goldRate24K) else 0.0
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            GlassCard(Modifier.fillMaxWidth(), goldBorder = true) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Review & Seal", style = MaterialTheme.typography.headlineMedium, color = AuraColors.OnSurface)
+                    Text("Confirm customer, item Eq.g, payment and ledger impact before saving.", color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                    HorizontalDivider(color = AuraColors.GlassWhite10)
+                    SummaryRow("Customer", viewModel.selectedCustomer?.let { it.companyName.ifEmpty { it.name } } ?: "Not selected")
+                    SummaryRow("Items", "${viewModel.items.size}")
+                    SummaryRow("Sub Total Grams", "${String.format("%.3f", viewModel.totalFineGold(settings.goldRate24K))}g")
+                    SummaryRow("Amount Subtotal", "₹${String.format("%,.2f", subtotal)}")
+                    SummaryRow("GST", "₹${String.format("%,.2f", gstAmount)}")
+                    SummaryRow("Total Payable", "₹${String.format("%,.2f", total)}", AuraColors.PrimaryContainer)
+                }
+            }
+        }
+        item {
+            GlassCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Settlement Impact", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                    SummaryRow("Cash Paid", "₹${String.format("%,.2f", cashP)}", AuraColors.Primary)
+                    SummaryRow("Gold Paid Pure", "${String.format("%.3f", goldPaidPure)}g", AuraColors.Primary)
+                    SummaryRow("Previous Balance Adjusted", "₹${String.format("%,.2f", previousBalance)}")
+                    HorizontalDivider(color = AuraColors.GlassWhite10)
+                    SummaryRow("Balance Due", "₹${String.format("%,.2f", remaining.coerceAtLeast(0.0))}", if (remaining > 0) AuraColors.Error else AuraColors.Primary)
+                    SummaryRow("Balance Gold", "${String.format("%.3f", remainingGold)}g pure", if (remaining > 0) AuraColors.Error else AuraColors.Primary)
+                }
+            }
+        }
+        item {
+            GlassCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Melting Queue Preview", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                    val pendingGold = viewModel.goldPayments.filter { it.gramsValue > 0.0 }
+                    if (pendingGold.isEmpty()) {
+                        Text("No old gold payment in this bill.", color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        pendingGold.forEach { payment ->
+                            SummaryRow("${payment.karat}K raw gold", "${String.format("%.3f", payment.gramsValue)}g → ${String.format("%.3f", payment.pureGold)}g pure")
+                        }
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(100.dp)) }
+    }
+}
+
+@Composable
 private fun SummaryRow(label: String, value: String, valueColor: androidx.compose.ui.graphics.Color = AuraColors.OnSurface) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), fontSize = 10.sp, letterSpacing = 0.5.sp)
@@ -944,7 +1009,7 @@ private fun BillingBottomBar(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GoldButton(
-                        text = if (step == 2) "Seal Invoice" else "Next",
+                        text = if (step == 3) "Seal Invoice" else if (step == 2) "Review" else "Next",
                         onClick = onNext,
                         modifier = Modifier.height(48.dp).defaultMinSize(minWidth = 150.dp)
                     )

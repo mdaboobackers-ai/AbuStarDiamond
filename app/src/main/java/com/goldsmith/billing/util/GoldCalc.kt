@@ -48,6 +48,9 @@ object GoldCalc {
         rate24K: Double
     ): Double = roundGrams(gramsWithMaking(netWeight, purityPercent, makingPercent) + stoneEquivalentGrams(stoneValue, rate24K))
 
+    fun subtotalEquivalentGrams(values: Iterable<Double>): Double =
+        roundGrams(values.sum())
+
     fun itemAmount(
         netWeight: Double,
         purityPercent: Double,

@@ -2,6 +2,7 @@ package com.goldsmith.billing.util
 
 import android.content.Context
 import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.FileContent
 import com.google.api.client.http.javanet.NetHttpTransport
@@ -25,15 +26,22 @@ object DriveBackupConfig {
 
     fun normalizeEmail(email: String?): String = email?.trim()?.lowercase().orEmpty()
     fun isServerAccount(email: String?): Boolean = normalizeEmail(email) == SERVER_BACKUP_EMAIL
+    fun resolveActiveAccountEmail(pickerEmail: String?, lastSignedInEmail: String?): String =
+        normalizeEmail(pickerEmail).ifBlank { normalizeEmail(lastSignedInEmail) }
+    fun hasActiveDriveAccount(activeEmail: String?, savedEmail: String?): Boolean =
+        normalizeEmail(activeEmail).isNotBlank()
 }
 
-class GoogleDriveHelper(private val context: Context) {
+class GoogleDriveHelper(
+    private val context: Context,
+    private val signedInAccount: GoogleSignInAccount? = null
+) {
 
     fun currentAccountEmail(): String =
-        GoogleSignIn.getLastSignedInAccount(context)?.email.orEmpty()
+        (signedInAccount ?: GoogleSignIn.getLastSignedInAccount(context))?.email.orEmpty()
 
     private fun driveService(): Drive? {
-        val account = GoogleSignIn.getLastSignedInAccount(context) ?: return null
+        val account = signedInAccount ?: GoogleSignIn.getLastSignedInAccount(context) ?: return null
         val credential = GoogleAccountCredential.usingOAuth2(context, Collections.singleton(DriveBackupConfig.SCOPE))
         credential.selectedAccount = account.account
         

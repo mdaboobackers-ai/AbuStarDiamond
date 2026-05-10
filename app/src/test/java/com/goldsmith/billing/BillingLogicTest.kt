@@ -60,6 +60,14 @@ class BillingLogicTest {
     }
 
     @Test
+    fun `subtotal grams uses sum of equivalent grams not net weight`() {
+        val eq1 = GoldCalc.equivalentGramsWithStone(34.95, 91.6, 7.0, 700.0, 7000.0)
+        val eq2 = GoldCalc.equivalentGramsWithStone(10.0, 75.0, 5.0, 0.0, 7000.0)
+
+        assertEquals(42.561, GoldCalc.subtotalEquivalentGrams(listOf(eq1, eq2)), 0.001)
+    }
+
+    @Test
     fun `gold payment converts karat to pure gold and cash value`() {
         assertEquals(2.0, GoldCalc.pureGoldFromKarat(2.0, 24), 0.001)
         assertEquals(1.833, GoldCalc.pureGoldFromKarat(2.0, 22), 0.001)

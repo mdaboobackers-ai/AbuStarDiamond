@@ -207,31 +207,23 @@ fun DashboardScreen(
                         Row(
                             Modifier.fillMaxWidth().padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Icon(Icons.Default.LocationOn, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
-                                Column {
-                                    Text(
-                                        if (location.isNotBlank()) location else "Tamil Nadu, India",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = AuraColors.OnSurface,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        "${state.marketRate.sourceLabel} - manual rates stay saved",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = AuraColors.OnSurfaceVariant,
-                                        fontSize = 10.sp
-                                    )
-                                }
+                            Icon(Icons.Default.LocationOn, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    if (location.isNotBlank()) location else "Tamil Nadu, India",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AuraColors.OnSurface,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    "${state.marketRate.sourceLabel} - manual rates stay saved",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AuraColors.OnSurfaceVariant,
+                                    fontSize = 10.sp
+                                )
                             }
-                            Text(
-                                "₹${String.format("%.2f", state.marketRate.rate24K)}",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = AuraColors.PrimaryContainer,
-                                fontWeight = FontWeight.Bold
-                            )
                         }
                     }
                 }

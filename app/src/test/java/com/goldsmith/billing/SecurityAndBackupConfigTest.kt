@@ -31,4 +31,38 @@ class SecurityAndBackupConfigTest {
         assertTrue(DriveBackupConfig.isServerAccount(" MDABOOBACKERS19@gmail.com "))
         assertFalse(DriveBackupConfig.isServerAccount("shop@example.com"))
     }
+
+    @Test
+    fun `backup account resolution retries with selected picker email`() {
+        assertEquals(
+            "owner@example.com",
+            DriveBackupConfig.resolveActiveAccountEmail(
+                pickerEmail = " owner@example.com ",
+                lastSignedInEmail = "old@example.com"
+            )
+        )
+        assertEquals(
+            "fallback@example.com",
+            DriveBackupConfig.resolveActiveAccountEmail(
+                pickerEmail = "",
+                lastSignedInEmail = "fallback@example.com"
+            )
+        )
+    }
+
+    @Test
+    fun `saved backup email is display only and does not replace active sign in`() {
+        assertFalse(
+            DriveBackupConfig.hasActiveDriveAccount(
+                activeEmail = "",
+                savedEmail = "saved@example.com"
+            )
+        )
+        assertTrue(
+            DriveBackupConfig.hasActiveDriveAccount(
+                activeEmail = "active@example.com",
+                savedEmail = ""
+            )
+        )
+    }
 }

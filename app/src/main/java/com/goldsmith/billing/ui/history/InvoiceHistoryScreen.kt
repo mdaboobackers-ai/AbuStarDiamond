@@ -770,7 +770,7 @@ fun InvoiceDetailScreen(
                 item {
                     GlassCard(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PaymentRow("Sub Total Grams", "${String.format("%.3f", inv.totalWeightGrams)}g")
+                            PaymentRow("Sub Total Grams", "${String.format("%.3f", inv.totalFineGoldGrams)}g")
                             PaymentRow("Amount Subtotal", "₹${String.format("%,.2f", inv.subtotal)}")
                             PaymentRow("GST (${inv.gstPercent}%)", "₹${String.format("%,.2f", inv.gstAmount)}")
                             Divider(color = AuraColors.GlassWhite10)

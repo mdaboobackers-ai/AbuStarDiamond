@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Abu Star Jewellery ERP Concepts</title>
+  <style>
+    :root {
+      --ink: #13120f;
+      --muted: #6e675b;
+      --line: #e7dfd2;
+      --paper: #fffdf8;
+      --ivory: #f8f3e8;
+      --gold: #c99a2e;
+      --gold-deep: #8d6414;
+      --green: #207a55;
+      --red: #ba3930;
+      --charcoal: #181713;
+      --panel: #242117;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #ebe3d4;
+      color: var(--ink);
+      font-family: "Georgia", "Times New Roman", serif;
+    }
+    .stage {
+      display: grid;
+      grid-template-columns: repeat(4, 390px);
+      gap: 28px;
+      padding: 28px;
+      align-items: start;
+    }
+    .phone {
+      width: 390px;
+      min-height: 844px;
+      border-radius: 34px;
+      overflow: hidden;
+      background: var(--paper);
+      box-shadow: 0 28px 80px rgba(44, 34, 20, .22);
+      border: 8px solid #11100d;
+      position: relative;
+    }
+    .phone.dark {
+      background:
+        radial-gradient(circle at 80% -8%, rgba(201,154,46,.28), transparent 32%),
+        linear-gradient(180deg, #242014 0%, #14130f 64%, #11100d 100%);
+      color: #fff7e4;
+    }
+    .top {
+      height: 74px;
+      padding: 22px 22px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand {
+      letter-spacing: .12em;
+      font-size: 11px;
+      color: var(--gold);
+      font-weight: 700;
+      font-family: "Trebuchet MS", sans-serif;
+    }
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #d9b85b, #714c0b);
+      display: grid;
+      place-items: center;
+      color: #fff5cf;
+      font: 700 12px "Trebuchet MS", sans-serif;
+    }
+    .content { padding: 0 20px 22px; }
+    h1 {
+      margin: 8px 0 6px;
+      font-size: 31px;
+      line-height: 1.02;
+      letter-spacing: -.02em;
+      font-weight: 700;
+    }
+    h2 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: -.01em;
+    }
+    .sub {
+      color: var(--muted);
+      font: 500 12px/1.4 "Trebuchet MS", sans-serif;
+    }
+    .dark .sub { color: rgba(255,247,228,.62); }
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .card {
+      background: rgba(255,255,255,.72);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px;
+      box-shadow: 0 10px 28px rgba(65,47,20,.06);
+    }
+    .dark .card {
+      background: rgba(255,255,255,.055);
+      border-color: rgba(255,255,255,.13);
+      box-shadow: none;
+    }
+    .label {
+      font: 700 9px "Trebuchet MS", sans-serif;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .dark .label { color: rgba(255,247,228,.52); }
+    .num {
+      margin-top: 7px;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .num.gold { color: var(--gold); }
+    .num.green { color: var(--green); }
+    .num.red { color: var(--red); }
+    .dark .num.green { color: #71d7a4; }
+    .timeline {
+      margin-top: 16px;
+      display: grid;
+      gap: 10px;
+    }
+    .entry {
+      display: grid;
+      grid-template-columns: 36px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fffaf0;
+    }
+    .dark .entry {
+      background: rgba(255,255,255,.05);
+      border-color: rgba(255,255,255,.11);
+    }
+    .dot {
+      width: 36px;
+      height: 36px;
+      border-radius: 12px;
+      background: rgba(201,154,46,.16);
+      display: grid;
+      place-items: center;
+      color: var(--gold);
+      font: 700 16px "Trebuchet MS", sans-serif;
+    }
+    .entry-title {
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .entry-meta {
+      margin-top: 3px;
+      color: var(--muted);
+      font: 500 11px "Trebuchet MS", sans-serif;
+    }
+    .dark .entry-meta { color: rgba(255,247,228,.54); }
+    .pill {
+      padding: 6px 8px;
+      border-radius: 99px;
+      background: rgba(201,154,46,.13);
+      color: var(--gold-deep);
+      font: 700 10px "Trebuchet MS", sans-serif;
+    }
+    .dark .pill { color: #f0ca68; }
+    .stepbar {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin: 16px 0;
+    }
+    .step {
+      height: 48px;
+      border-radius: 13px;
+      background: #f0e8da;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font: 700 10px "Trebuchet MS", sans-serif;
+    }
+    .step.on {
+      background: #1d1a13;
+      color: #f6d07a;
+    }
+    .item-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      margin-top: 10px;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .metric {
+      background: var(--ivory);
+      border-radius: 12px;
+      padding: 10px;
+    }
+    .metric strong {
+      display: block;
+      margin-top: 5px;
+      font-size: 15px;
+    }
+    .settlement {
+      margin-top: 14px;
+      border-radius: 20px;
+      background: #17150f;
+      color: #fff7e4;
+      padding: 16px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 7px 0;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      font: 500 13px "Trebuchet MS", sans-serif;
+    }
+    .row:last-child { border-bottom: 0; }
+    .seal {
+      margin-top: 14px;
+      height: 54px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #d7ad43, #8a5d10);
+      display: grid;
+      place-items: center;
+      color: #fff6da;
+      font: 800 12px "Trebuchet MS", sans-serif;
+      letter-spacing: .16em;
+    }
+    .ledger-head {
+      background: #181713;
+      color: #fff4dc;
+      padding: 22px 20px;
+      border-bottom-left-radius: 24px;
+      border-bottom-right-radius: 24px;
+    }
+    .wallet {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .wallet .card {
+      background: rgba(255,255,255,.08);
+      border-color: rgba(255,255,255,.14);
+    }
+    .invoice {
+      background: #fffdf7;
+      padding: 20px;
+      min-height: 844px;
+    }
+    .invoice-box {
+      border: 2px solid #1c1a15;
+      padding: 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .logo {
+      width: 48px;
+      height: 48px;
+      border-radius: 13px;
+      background: #1c1a15;
+      color: var(--gold);
+      display: grid;
+      place-items: center;
+      font-size: 22px;
+      flex: 0 0 auto;
+    }
+    .table {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      font: 500 10px "Trebuchet MS", sans-serif;
+    }
+    .tr {
+      display: grid;
+      grid-template-columns: 1.4fr .65fr .65fr .65fr .75fr;
+      border-bottom: 1px solid var(--line);
+    }
+    .tr:last-child { border-bottom: 0; }
+    .th, .td { padding: 9px 7px; }
+    .th {
+      background: #eee5d6;
+      font-weight: 800;
+      letter-spacing: .06em;
+    }
+    .td.amount { font-weight: 800; }
+    .note {
+      margin-top: 14px;
+      border-left: 3px solid var(--gold);
+      padding: 10px 12px;
+      background: #fbf3e3;
+      font: 500 12px/1.45 "Trebuchet MS", sans-serif;
+      color: #5f523f;
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <section class="phone dark" id="dashboard">
+      <div class="top">
+        <div class="brand">ABU STAR ERP</div>
+        <div class="avatar">AS</div>
+      </div>
+      <div class="content">
+        <h1>Gold Ledger<br>Command</h1>
+        <div class="sub">Today’s rate drives cash settlements, while every customer remains tracked in pure gold.</div>
+        <div class="grid2">
+          <div class="card"><div class="label">Pure Gold Due</div><div class="num gold">128.430g</div></div>
+          <div class="card"><div class="label">Cash Due Today</div><div class="num red">₹9.84L</div></div>
+          <div class="card"><div class="label">Melting Pending</div><div class="num">7</div></div>
+          <div class="card"><div class="label">Invoices</div><div class="num green">24</div></div>
+        </div>
+        <div class="timeline">
+          <div class="entry"><div class="dot">₹</div><div><div class="entry-title">Khaleem Jewellers paid cash</div><div class="entry-meta">10.000g pending valued at today’s rate</div></div><div class="pill">SETTLED</div></div>
+          <div class="entry"><div class="dot">M</div><div><div class="entry-title">Purity check shortage</div><div class="entry-meta">99.99% claimed, 99.10% tested</div></div><div class="pill">+0.288g</div></div>
+          <div class="entry"><div class="dot">G</div><div><div class="entry-title">Old gold received</div><div class="entry-meta">22K 32.000g linked to invoice</div></div><div class="pill">MELT</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="phone" id="billing">
+      <div class="top">
+        <div class="brand">BILLING FLOW</div>
+        <div class="avatar">4</div>
+      </div>
+      <div class="content">
+        <h1>Review & Seal</h1>
+        <div class="sub">Nothing posts to ledger until the final settlement view is confirmed.</div>
+        <div class="stepbar"><div class="step">CLIENT</div><div class="step">ITEMS</div><div class="step">PAY</div><div class="step on">SEAL</div></div>
+        <div class="item-card">
+          <h2>Noise Chain</h2>
+          <div class="sub">22K · Making 7.0% · Stone ₹700</div>
+          <div class="metrics">
+            <div class="metric"><div class="label">Gross</div><strong>36.000g</strong></div>
+            <div class="metric"><div class="label">Less</div><strong>1.050g</strong></div>
+            <div class="metric"><div class="label">Net</div><strong>34.950g</strong></div>
+            <div class="metric"><div class="label">Eq Gold</div><strong>34.561g</strong></div>
+            <div class="metric"><div class="label">916 Eq</div><strong>37.730g</strong></div>
+            <div class="metric"><div class="label">Amount</div><strong>₹2,41,927</strong></div>
+          </div>
+        </div>
+        <div class="settlement">
+          <div class="row"><span>Total gold due</span><strong>34.561g pure</strong></div>
+          <div class="row"><span>Cash paid</span><strong>₹40,000</strong></div>
+          <div class="row"><span>Gold paid</span><strong>22K 20.000g</strong></div>
+          <div class="row"><span>Melting expected</span><strong>18.320g pure</strong></div>
+          <div class="row"><span>Balance today</span><strong>₹74,880 / 9.360g</strong></div>
+        </div>
+        <div class="seal">SEAL INVOICE</div>
+      </div>
+    </section>
+
+    <section class="phone" id="ledger">
+      <div class="ledger-head">
+        <div class="brand">CUSTOMER LEDGER</div>
+        <h1>Khaleem<br>Jewellers</h1>
+        <div class="sub">Gold wallet, invoice balance, melting corrections, and settlements in one timeline.</div>
+        <div class="wallet">
+          <div class="card"><div class="label">Customer Owes</div><div class="num gold">9.360g</div></div>
+          <div class="card"><div class="label">Today Cash</div><div class="num red">₹74,880</div></div>
+        </div>
+      </div>
+      <div class="content">
+        <div class="timeline">
+          <div class="entry"><div class="dot">I</div><div><div class="entry-title">Invoice #INV-8830</div><div class="entry-meta">34.561g pure billed</div></div><div class="pill">+34.561g</div></div>
+          <div class="entry"><div class="dot">₹</div><div><div class="entry-title">Cash payment</div><div class="entry-meta">Converted at payment date rate</div></div><div class="pill">-5.000g</div></div>
+          <div class="entry"><div class="dot">G</div><div><div class="entry-title">Old gold received</div><div class="entry-meta">20.000g 22K raw</div></div><div class="pill">-18.333g</div></div>
+          <div class="entry"><div class="dot">M</div><div><div class="entry-title">Melting adjustment</div><div class="entry-meta">Purity tested lower than claimed</div></div><div class="pill">+0.132g</div></div>
+          <div class="entry"><div class="dot">→</div><div><div class="entry-title">Carry forward</div><div class="entry-meta">Can settle now or adjust next bill</div></div><div class="pill">OPEN</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="phone invoice" id="invoice">
+      <div class="invoice-box">
+        <div style="display:flex; gap:12px;">
+          <div class="logo">◆</div>
+          <div>
+            <div style="font-size:24px; font-weight:800; letter-spacing:-.03em;">ABU STAR DIAMONDS</div>
+            <div class="sub">Owner: Showkath Ali<br>Jafersh Street, Trichy<br>Phone: 9443115664</div>
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <div style="color:var(--gold); font:800 15px 'Trebuchet MS', sans-serif;">#INV-8830</div>
+          <div class="sub">10 May 2026</div>
+        </div>
+      </div>
+      <div style="margin-top:18px;">
+        <div class="label" style="color:var(--gold);">Bill To</div>
+        <h2>Khaleem Jewellers</h2>
+        <div class="sub">Owner: Khaleem · Phone: 9840150436 · Poonamallee</div>
+      </div>
+      <div class="table">
+        <div class="tr"><div class="th">ITEM</div><div class="th">NET</div><div class="th">EQ.G</div><div class="th">MKG</div><div class="th">AMOUNT</div></div>
+        <div class="tr"><div class="td">Noise Chain<br><span class="sub">Stone ₹700</span></div><div class="td">34.950</div><div class="td">34.561</div><div class="td">7%</div><div class="td amount">₹2,41,927</div></div>
+      </div>
+      <div class="settlement" style="background:#fff; color:var(--ink); border:1px solid var(--line);">
+        <div class="row" style="border-color:var(--line);"><span>Total gold due</span><strong>34.561g</strong></div>
+        <div class="row" style="border-color:var(--line);"><span>Gold paid</span><strong>20.000g 22K</strong></div>
+        <div class="row" style="border-color:var(--line);"><span>Melting / purity check</span><strong>99.10%</strong></div>
+        <div class="row" style="border-color:var(--line);"><span>Balance gold</span><strong>9.360g pure</strong></div>
+        <div class="row" style="border-color:var(--line);"><span>Balance at today rate</span><strong>₹74,880</strong></div>
+      </div>
+      <div class="note">Pending gold balance is valued at the gold rate on the payment date. Melting differences are linked to this invoice and customer ledger.</div>
+    </section>
+  </main>
+</body>
+</html>

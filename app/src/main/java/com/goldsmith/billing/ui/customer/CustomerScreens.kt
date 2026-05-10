@@ -23,6 +23,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.goldsmith.billing.data.dao.CustomerDao
 import com.goldsmith.billing.data.dao.InvoiceDao
+import com.goldsmith.billing.data.dao.InvoicePaymentDao
+import com.goldsmith.billing.data.dao.MeltingDao
 import com.goldsmith.billing.data.model.Customer
 import com.goldsmith.billing.data.model.Invoice
 import com.goldsmith.billing.data.repository.SettingsRepository
@@ -41,6 +43,8 @@ import javax.inject.Inject
 class CustomerViewModel @Inject constructor(
     private val customerDao: CustomerDao,
     private val invoiceDao: InvoiceDao,
+    private val invoicePaymentDao: InvoicePaymentDao,
+    private val meltingDao: MeltingDao,
     settingsRepo: SettingsRepository
 ) : ViewModel() {
     private val _query = MutableStateFlow("")
@@ -78,6 +82,21 @@ class CustomerViewModel @Inject constructor(
 
     fun getInvoicesForCustomer(customerId: Long): Flow<List<Invoice>> =
         invoiceDao.getInvoicesByCustomer(customerId)
+
+    fun getPaymentsForCustomer(customerId: Long): Flow<List<com.goldsmith.billing.data.model.InvoicePayment>> =
+        combine(invoiceDao.getInvoicesByCustomer(customerId), invoicePaymentDao.getAllPayments()) { invoices, payments ->
+            val invoiceIds = invoices.map { it.id }.toSet()
+            payments.filter { it.invoiceId in invoiceIds }
+        }
+
+    fun getMeltingForCustomer(customerId: Long): Flow<List<com.goldsmith.billing.data.model.MeltingRecord>> =
+        meltingDao.getMeltingRecordsByCustomer(customerId)
+
+    suspend fun settleCustomer(customerId: Long) {
+        customerDao.getCustomerById(customerId)?.let { customer ->
+            customerDao.updateCustomer(customer.copy(cashBalance = 0.0, goldBalanceGrams = 0.0, updatedAt = Date()))
+        }
+    }
 }
 
 // ─── Customer List Screen ─────────────────────────────────────────────────────
@@ -231,6 +250,11 @@ fun CustomerCard(customer: Customer, onViewLedger: () -> Unit, onQuickBill: () -
             }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                WalletMetric("Gold Wallet", "${String.format("%.3f", customer.goldBalanceGrams)}g", Modifier.weight(1f))
+                WalletMetric("Cash Ledger", "₹${String.format("%,.0f", customer.cashBalance)}", Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onViewLedger, modifier = Modifier.weight(1f).height(44.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.OnSurface), border = BorderStroke(1.dp, AuraColors.GlassWhite10), shape = RoundedCornerShape(10.dp)) {
                     Text("VIEW LEDGER", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, letterSpacing = 1.sp)
                 }
@@ -243,9 +267,36 @@ fun CustomerCard(customer: Customer, onViewLedger: () -> Unit, onQuickBill: () -
 }
 
 @Composable
+private fun WalletMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .background(AuraColors.GlassWhite5, RoundedCornerShape(10.dp))
+            .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(10.dp))
+            .padding(10.dp)
+    ) {
+        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.45f), fontSize = 8.sp)
+        Spacer(Modifier.height(4.dp))
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
 fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> Unit, viewModel: CustomerViewModel = hiltViewModel()) {
     val invoices by viewModel.getInvoicesForCustomer(customerId).collectAsState(emptyList())
+    val payments by viewModel.getPaymentsForCustomer(customerId).collectAsState(emptyList())
+    val melting by viewModel.getMeltingForCustomer(customerId).collectAsState(emptyList())
     val settings by viewModel.settings.collectAsState()
+    val customer = remember(invoices, payments, melting) {
+        invoices.firstOrNull()?.let {
+            Customer(
+                id = it.customerId,
+                name = it.customerOwnerName,
+                phone = it.customerPhone,
+                companyName = it.customerShopName,
+                address = it.customerAddress
+            )
+        }
+    }
 
     Scaffold(
         containerColor = AuraColors.Background,
@@ -259,6 +310,19 @@ fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> 
         }
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item {
+                val goldDue = invoices.sumOf { GoldCalc.pendingPureGold(it.remainingBalance, it.goldRate24K.takeIf { rate -> rate > 0.0 } ?: settings.goldRate24K).coerceAtLeast(0.0) }
+                val cashDue = invoices.sumOf { GoldCalc.pendingCashAtRate(it.remainingBalance, it.goldRate24K.takeIf { rate -> rate > 0.0 } ?: settings.goldRate24K, settings.goldRate24K).coerceAtLeast(0.0) }
+                GlassCard(Modifier.fillMaxWidth(), goldBorder = true) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(customer?.companyName?.ifEmpty { customer.name } ?: "Customer Wallet", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            WalletMetric("Pure Gold Due", "${String.format("%.3f", goldDue)}g", Modifier.weight(1f))
+                            WalletMetric("Today Rate Value", "₹${String.format("%,.0f", cashDue)}", Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
             items(invoices) { invoice ->
                 val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K
                 val balanceGold = GoldCalc.pendingPureGold(invoice.remainingBalance, invoiceRate).coerceAtLeast(0.0)
@@ -280,7 +344,60 @@ fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> 
                     }
                 }
             }
+            item {
+                Text("LEDGER TIMELINE", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), letterSpacing = 2.sp, modifier = Modifier.padding(top = 8.dp))
+            }
+            val timeline = buildCustomerTimeline(invoices, payments, melting)
+            items(timeline) { entry ->
+                LedgerTimelineCard(entry)
+            }
             item { Spacer(Modifier.height(80.dp)) }
+        }
+    }
+}
+
+private data class CustomerLedgerEntry(
+    val title: String,
+    val subtitle: String,
+    val value: String,
+    val date: Date,
+    val isDebit: Boolean
+)
+
+private fun buildCustomerTimeline(
+    invoices: List<Invoice>,
+    payments: List<com.goldsmith.billing.data.model.InvoicePayment>,
+    melting: List<com.goldsmith.billing.data.model.MeltingRecord>
+): List<CustomerLedgerEntry> {
+    val invoiceEntries = invoices.map {
+        CustomerLedgerEntry("Invoice ${it.invoiceNumber}", "Eq gold billed ${String.format("%.3f", it.totalFineGoldGrams)}g", "₹${String.format("%,.0f", it.totalAmount)}", it.date, true)
+    }
+    val paymentEntries = payments.map {
+        if (it.paymentMode == "GOLD") {
+            CustomerLedgerEntry("Gold payment", "${it.goldKarat}K received", "${String.format("%.3f", it.goldGrams)}g", it.date, false)
+        } else {
+            CustomerLedgerEntry("Cash payment", "Payment received", "₹${String.format("%,.0f", it.amount)}", it.date, false)
+        }
+    }
+    val meltingEntries = melting.map {
+        val diff = GoldCalc.roundGrams(it.rawWeightGrams - it.finalPureWeightGrams).coerceAtLeast(0.0)
+        CustomerLedgerEntry("Melting / purity check", "Purity ${String.format("%.2f", it.purityPercent)}%, shortage ${String.format("%.3f", diff)}g", "${String.format("%.3f", it.finalPureWeightGrams)}g", it.updatedAt, diff > 0.0)
+    }
+    return (invoiceEntries + paymentEntries + meltingEntries).sortedByDescending { it.date }
+}
+
+@Composable
+private fun LedgerTimelineCard(entry: CustomerLedgerEntry) {
+    GlassCard(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(Modifier.size(38.dp).background(if (entry.isDebit) AuraColors.Error.copy(alpha = 0.12f) else AuraColors.Primary.copy(alpha = 0.12f), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                Icon(if (entry.isDebit) Icons.Default.NorthEast else Icons.Default.SouthWest, null, tint = if (entry.isDebit) AuraColors.Error else AuraColors.Primary, modifier = Modifier.size(18.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(entry.title, color = AuraColors.OnSurface, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                Text(entry.subtitle, color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(entry.value, color = if (entry.isDebit) AuraColors.Error else AuraColors.Primary, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
         }
     }
 }
