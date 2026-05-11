@@ -22,11 +22,9 @@ object DriveBackupConfig {
     const val SPACE = "appDataFolder"
     const val PARENT = "appDataFolder"
     const val SCOPE = DriveScopes.DRIVE_APPDATA
-    const val SERVER_BACKUP_EMAIL = "mdaboobackers19@gmail.com"
     const val FILE_QUERY = "name = '$REMOTE_FILE' and '$PARENT' in parents and trashed = false"
 
     fun normalizeEmail(email: String?): String = email?.trim()?.lowercase().orEmpty()
-    fun isServerAccount(email: String?): Boolean = normalizeEmail(email) == SERVER_BACKUP_EMAIL
     fun resolveActiveAccountEmail(pickerEmail: String?, lastSignedInEmail: String?): String =
         normalizeEmail(pickerEmail).ifBlank { normalizeEmail(lastSignedInEmail) }
     fun hasActiveDriveAccount(activeEmail: String?, savedEmail: String?): Boolean =

@@ -33,11 +33,8 @@ class SecurityAndBackupConfigTest {
         assertEquals("appDataFolder", DriveBackupConfig.SPACE)
         assertEquals("appDataFolder", DriveBackupConfig.PARENT)
         assertEquals("goldsmith_sync_v3.enc", DriveBackupConfig.REMOTE_FILE)
-        assertEquals("mdaboobackers19@gmail.com", DriveBackupConfig.SERVER_BACKUP_EMAIL)
         assertTrue(DriveBackupConfig.FILE_QUERY.contains("appDataFolder"))
         assertFalse(DriveBackupConfig.FILE_QUERY.contains("'root'"))
-        assertTrue(DriveBackupConfig.isServerAccount(" MDABOOBACKERS19@gmail.com "))
-        assertFalse(DriveBackupConfig.isServerAccount("shop@example.com"))
     }
 
     @Test

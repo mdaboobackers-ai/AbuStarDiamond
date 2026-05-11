@@ -60,6 +60,9 @@ interface InvoiceDao {
     @Query("SELECT * FROM invoices WHERE id = :id")
     suspend fun getInvoiceById(id: Long): Invoice?
 
+    @Query("SELECT * FROM invoices WHERE invoiceNumber = :invoiceNumber LIMIT 1")
+    suspend fun getInvoiceByNumber(invoiceNumber: String): Invoice?
+
     @Query("SELECT * FROM invoices WHERE date >= :startDate AND date <= :endDate ORDER BY date DESC")
     fun getInvoicesByDateRange(startDate: Date, endDate: Date): Flow<List<Invoice>>
 
@@ -146,6 +149,9 @@ interface MeltingDao {
     @Query("SELECT * FROM melting_records ORDER BY createdAt DESC")
     fun getAllMeltingRecords(): Flow<List<MeltingRecord>>
 
+    @Query("SELECT * FROM melting_records ORDER BY createdAt DESC")
+    suspend fun getAllMeltingRecordsSync(): List<MeltingRecord>
+
     @Query("SELECT * FROM melting_records WHERE customerId = :customerId ORDER BY createdAt DESC")
     fun getMeltingRecordsByCustomer(customerId: Long): Flow<List<MeltingRecord>>
 
@@ -189,6 +195,9 @@ interface CompanyProfileDao {
 interface InvoicePaymentDao {
     @Query("SELECT * FROM invoice_payments WHERE invoiceId = :invoiceId ORDER BY date DESC")
     fun getPaymentsForInvoice(invoiceId: Long): Flow<List<InvoicePayment>>
+
+    @Query("SELECT * FROM invoice_payments WHERE invoiceId = :invoiceId ORDER BY date DESC")
+    suspend fun getPaymentsForInvoiceSync(invoiceId: Long): List<InvoicePayment>
 
     @Query("SELECT * FROM invoice_payments ORDER BY date DESC")
     fun getAllPayments(): Flow<List<InvoicePayment>>

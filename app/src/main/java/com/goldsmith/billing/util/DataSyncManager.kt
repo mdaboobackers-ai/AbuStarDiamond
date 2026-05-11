@@ -176,42 +176,102 @@ class DataSyncManager(
     }
 
     private suspend fun smartMerge(remote: SyncPayload) {
-        // 1. Customers merge
+        val customerIdMap = mutableMapOf<Long, Long>()
+        val invoiceIdMap = mutableMapOf<Long, Long>()
+        val paymentIdMap = mutableMapOf<Long, Long>()
+        val invoiceIdsReceivingRemoteRows = mutableSetOf<Long>()
+
+        // 1. Customers merge by phone first. Local Room ids collide across offline devices.
         remote.customers.forEach { remoteCust ->
-            val localCust = db.customerDao().getCustomerById(remoteCust.id)
-            if (localCust == null) {
-                db.customerDao().insertCustomer(remoteCust)
-            } else if (remoteCust.updatedAt.after(localCust.updatedAt)) {
-                db.customerDao().updateCustomer(remoteCust)
+            val localCust = remoteCust.phone.takeIf { it.isNotBlank() }?.let { db.customerDao().getCustomerByPhone(it) }
+                ?: db.customerDao().getCustomerById(remoteCust.id)
+            val localId = if (localCust == null) {
+                db.customerDao().insertCustomer(remoteCust.copy(id = 0))
+            } else {
+                if (remoteCust.updatedAt.after(localCust.updatedAt)) {
+                    db.customerDao().updateCustomer(remoteCust.copy(id = localCust.id))
+                }
+                localCust.id
             }
+            customerIdMap[remoteCust.id] = localId
         }
 
-        // 2. Invoices merge
+        // 2. Invoices merge by invoice number. This preserves independent offline bills.
         remote.invoices.forEach { remoteInv ->
-            val localInv = db.invoiceDao().getInvoiceById(remoteInv.id)
-            if (localInv == null) {
-                db.invoiceDao().insertInvoice(remoteInv)
-            } else if (remoteInv.updatedAt.after(localInv.updatedAt)) {
-                db.invoiceDao().updateInvoice(remoteInv)
+            val mappedCustomerId = customerIdMap[remoteInv.customerId] ?: remoteInv.customerId
+            val normalizedRemote = remoteInv.copy(customerId = mappedCustomerId)
+            val localInv = db.invoiceDao().getInvoiceByNumber(remoteInv.invoiceNumber)
+            val localId = if (localInv == null) {
+                db.invoiceDao().insertInvoice(normalizedRemote.copy(id = 0)).also {
+                    invoiceIdsReceivingRemoteRows += it
+                }
+            } else {
+                if (remoteInv.updatedAt.after(localInv.updatedAt)) {
+                    db.invoiceDao().updateInvoice(normalizedRemote.copy(id = localInv.id))
+                    invoiceIdsReceivingRemoteRows += localInv.id
+                }
+                localInv.id
             }
+            invoiceIdMap[remoteInv.id] = localId
         }
         
-        // 3. Bill Items
-        remote.billItems.forEach { db.billItemDao().insertBillItem(it) }
+        // 3. Bill Items: replace item rows only for invoices we mapped from the remote payload.
+        remote.billItems.groupBy { it.invoiceId }.forEach { (remoteInvoiceId, items) ->
+            val localInvoiceId = invoiceIdMap[remoteInvoiceId] ?: return@forEach
+            if (localInvoiceId !in invoiceIdsReceivingRemoteRows) return@forEach
+            db.billItemDao().deleteAllItemsForInvoice(localInvoiceId)
+            db.billItemDao().insertBillItems(items.map { it.copy(id = 0, invoiceId = localInvoiceId) })
+        }
 
-        // 4. Payments
-        remote.invoicePayments.orEmpty().forEach { db.invoicePaymentDao().insertPayment(it) }
+        // 4. Payments: merge by invoice + payment details so offline payment rows do not collide by id.
+        remote.invoicePayments.orEmpty().forEach { remotePayment ->
+            val localInvoiceId = invoiceIdMap[remotePayment.invoiceId] ?: return@forEach
+            val existing = db.invoicePaymentDao().getPaymentsForInvoiceSync(localInvoiceId)
+                .firstOrNull { it.samePaymentAs(remotePayment) }
+            val localPaymentId = existing?.id ?: db.invoicePaymentDao().insertPayment(remotePayment.copy(id = 0, invoiceId = localInvoiceId))
+            paymentIdMap[remotePayment.id] = localPaymentId
+        }
 
-        // 5. Melting
+        // 5. Melting: preserve links to the remapped invoice/payment rows.
+        val localMelting = db.meltingDao().getAllMeltingRecordsSync()
         remote.meltingRecords.forEach { remoteMelt ->
-            val localMelt = db.meltingDao().getMeltingRecordById(remoteMelt.id)
+            val mappedInvoiceId = remoteMelt.linkedInvoiceId?.let { invoiceIdMap[it] }
+            val mappedPaymentId = remoteMelt.linkedPaymentId?.let { paymentIdMap[it] }
+            val mappedCustomerId = customerIdMap[remoteMelt.customerId] ?: remoteMelt.customerId
+            val normalizedRemote = remoteMelt.copy(
+                customerId = mappedCustomerId,
+                linkedInvoiceId = mappedInvoiceId,
+                linkedPaymentId = mappedPaymentId
+            )
+            val localMelt = localMelting.firstOrNull { it.sameMeltingAs(normalizedRemote) }
+                ?: db.meltingDao().getMeltingRecordById(remoteMelt.id)
             if (localMelt == null) {
-                db.meltingDao().insertMeltingRecord(remoteMelt)
+                db.meltingDao().insertMeltingRecord(normalizedRemote.copy(id = 0))
             } else if (remoteMelt.updatedAt.after(localMelt.updatedAt)) {
-                db.meltingDao().updateMeltingRecord(remoteMelt)
+                db.meltingDao().updateMeltingRecord(normalizedRemote.copy(id = localMelt.id))
             }
         }
 
         remote.companyProfile?.let { db.companyProfileDao().upsertProfile(it) }
+    }
+
+    private fun InvoicePayment.samePaymentAs(other: InvoicePayment): Boolean =
+        paymentMode == other.paymentMode &&
+            kotlin.math.abs(amount - other.amount) < 0.005 &&
+            kotlin.math.abs(goldGrams - other.goldGrams) < 0.0005 &&
+            goldKarat == other.goldKarat &&
+            kotlin.math.abs(date.time - other.date.time) < 1000L &&
+            notes == other.notes
+
+    private fun MeltingRecord.sameMeltingAs(other: MeltingRecord): Boolean {
+        if (linkedPaymentId != null && linkedPaymentId == other.linkedPaymentId) return true
+        if (linkedInvoiceId != null && linkedInvoiceId == other.linkedInvoiceId &&
+            kotlin.math.abs(rawWeightGrams - other.rawWeightGrams) < 0.0005 &&
+            kotlin.math.abs(createdAt.time - other.createdAt.time) < 1000L
+        ) return true
+        return customerId == other.customerId &&
+            kotlin.math.abs(rawWeightGrams - other.rawWeightGrams) < 0.0005 &&
+            kotlin.math.abs(finalPureWeightGrams - other.finalPureWeightGrams) < 0.0005 &&
+            kotlin.math.abs(createdAt.time - other.createdAt.time) < 1000L
     }
 }

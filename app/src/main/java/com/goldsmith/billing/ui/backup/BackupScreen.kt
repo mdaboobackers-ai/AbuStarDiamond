@@ -170,10 +170,14 @@ fun BackupScreen(
             viewModel.showAccountError("Google account selection was cancelled. Please select an account to run backup.")
             return@rememberLauncherForActivityResult
         }
-        val pickerAccount = runCatching {
+        var signInError: ApiException? = null
+        val pickerAccount = try {
             GoogleSignIn.getSignedInAccountFromIntent(result.data)
                 .getResult(ApiException::class.java)
-        }.getOrNull()
+        } catch (e: ApiException) {
+            signInError = e
+            null
+        }
         val fallbackAccount = GoogleSignIn.getLastSignedInAccount(context)
         val resolvedAccount = pickerAccount ?: fallbackAccount
         val resolvedEmail = DriveBackupConfig.resolveActiveAccountEmail(
@@ -192,7 +196,11 @@ fun BackupScreen(
             pendingCloudAction = null
         } else {
             pendingCloudAction = null
-            viewModel.showAccountError("Google account was not selected. Please choose the account again.")
+            val statusCode = signInError?.statusCode
+            viewModel.showAccountError(
+                if (statusCode != null) "Google sign-in failed. Status code: $statusCode. Please check Google Play Services and app Drive access."
+                else "Google account was not selected. Please choose the account again."
+            )
         }
     }
 
@@ -357,6 +365,12 @@ fun BackupScreen(
                             "Format: Version 3 portable encrypted backup",
                             style = MaterialTheme.typography.labelSmall,
                             color = AuraColors.PrimaryContainer.copy(alpha = 0.7f),
+                            fontSize = 10.sp
+                        )
+                        Text(
+                            "App ID: ${context.packageName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuraColors.OnSurfaceVariant.copy(alpha = 0.35f),
                             fontSize = 10.sp
                         )
                         if (settings.lastBackupAccountEmail.isNotBlank()) {
