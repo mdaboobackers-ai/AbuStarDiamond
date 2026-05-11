@@ -163,4 +163,15 @@ class BillingLogicTest {
         assertFalse(GoldCalc.isValidDecimal("12..45"))
         assertFalse(GoldCalc.isValidDecimal("abc"))
     }
+
+    @Test
+    fun `blank optional cash payment is accepted as zero when gold is entered`() {
+        assertTrue(GoldCalc.isValidOptionalDecimal(""))
+        assertTrue(GoldCalc.isValidOptionalDecimal("   "))
+        assertTrue(GoldCalc.isValidOptionalDecimal("1250.75"))
+        assertFalse(GoldCalc.isValidOptionalDecimal("12..45"))
+        assertFalse(GoldCalc.isValidOptionalDecimal("-1"))
+        assertEquals(0.0, GoldCalc.decimalOrZero(""), 0.001)
+        assertEquals(1250.75, GoldCalc.decimalOrZero("1250.75"), 0.001)
+    }
 }

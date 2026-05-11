@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.*
 import com.goldsmith.billing.data.repository.SettingsRepository
+import com.goldsmith.billing.util.BackupSchedule
 import com.goldsmith.billing.worker.BirthdayAlertWorker
 import com.goldsmith.billing.worker.DailyBackupWorker
 import dagger.hilt.android.HiltAndroidApp
@@ -54,7 +55,7 @@ class GoldsmithApp : Application(), Configuration.Provider {
 
     private fun scheduleDailyBackup() {
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
             .build()
 
         val backupRequest = PeriodicWorkRequestBuilder<DailyBackupWorker>(
@@ -64,13 +65,14 @@ class GoldsmithApp : Application(), Configuration.Provider {
             flexTimeIntervalUnit = TimeUnit.HOURS
         )
             .setConstraints(constraints)
+            .setInitialDelay(BackupSchedule.initialDelayToNextDailyBackup(), TimeUnit.MILLISECONDS)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
             .addTag("daily_backup")
             .build()
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "goldsmith_daily_backup",
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             backupRequest
         )
     }

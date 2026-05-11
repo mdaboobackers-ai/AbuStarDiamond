@@ -41,6 +41,7 @@ class SettingsRepository @Inject constructor(
         val LAST_BACKUP_ACCOUNT_EMAIL = stringPreferencesKey("last_backup_account_email")
         val LAST_RESTORE_ACCOUNT_EMAIL = stringPreferencesKey("last_restore_account_email")
         val INVOICE_DEVICE_CODE = stringPreferencesKey("invoice_device_code")
+        val BACKUP_DOCUMENT_URI = stringPreferencesKey("backup_document_uri")
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data
@@ -63,7 +64,8 @@ class SettingsRepository @Inject constructor(
                 customIconUri = prefs[CUSTOM_ICON_URI] ?: "",
                 selectedBackupEmail = prefs[SELECTED_BACKUP_EMAIL] ?: "",
                 lastBackupAccountEmail = prefs[LAST_BACKUP_ACCOUNT_EMAIL] ?: "",
-                lastRestoreAccountEmail = prefs[LAST_RESTORE_ACCOUNT_EMAIL] ?: ""
+                lastRestoreAccountEmail = prefs[LAST_RESTORE_ACCOUNT_EMAIL] ?: "",
+                backupDocumentUri = prefs[BACKUP_DOCUMENT_URI] ?: ""
             )
         }
 
@@ -175,6 +177,11 @@ class SettingsRepository @Inject constructor(
     suspend fun updateLastRestoreAccountEmail(email: String) {
         context.dataStore.edit { it[LAST_RESTORE_ACCOUNT_EMAIL] = email }
     }
+
+    suspend fun updateBackupDocumentUri(uri: String) {
+        context.dataStore.edit { it[BACKUP_DOCUMENT_URI] = uri }
+    }
+
 }
 
 data class AppSettings(
@@ -194,5 +201,6 @@ data class AppSettings(
     val customIconUri: String = "",
     val selectedBackupEmail: String = "",
     val lastBackupAccountEmail: String = "",
-    val lastRestoreAccountEmail: String = ""
+    val lastRestoreAccountEmail: String = "",
+    val backupDocumentUri: String = ""
 )

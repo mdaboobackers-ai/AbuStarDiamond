@@ -139,6 +139,16 @@ object GoldCalc {
         return if (allowZero) parsed >= 0.0 else parsed > 0.0
     }
 
+    fun isValidOptionalDecimal(value: String, allowZero: Boolean = true): Boolean {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return true
+        val parsed = trimmed.toDoubleOrNull() ?: return false
+        return if (allowZero) parsed >= 0.0 else parsed > 0.0
+    }
+
+    fun decimalOrZero(value: String): Double =
+        value.trim().takeIf { it.isNotEmpty() }?.toDoubleOrNull() ?: 0.0
+
     fun roundGrams(value: Double): Double =
         BigDecimal.valueOf(value).setScale(3, RoundingMode.HALF_UP).toDouble()
 

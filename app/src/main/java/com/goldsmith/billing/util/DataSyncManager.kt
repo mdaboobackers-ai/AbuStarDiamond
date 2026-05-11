@@ -1,6 +1,7 @@
 package com.goldsmith.billing.util
 
 import android.content.Context
+import android.net.Uri
 import com.goldsmith.billing.data.db.GoldsmithDatabase
 import com.goldsmith.billing.data.model.*
 import com.goldsmith.billing.security.KeystoreManager
@@ -10,7 +11,11 @@ import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class SyncPayload(
     val customers: List<Customer>,
@@ -23,6 +28,31 @@ data class SyncPayload(
     val deviceId: String,
     val timestamp: Long = System.currentTimeMillis()
 )
+
+object BackupFileConfig {
+    const val MIME_TYPE = "application/octet-stream"
+    const val EXTENSION = "asdb"
+
+    fun defaultFileName(timestamp: Long = System.currentTimeMillis()): String =
+        "abu_star_backup_$timestamp.$EXTENSION"
+
+    fun dailyAutoFileName(date: Date = Date()): String =
+        "abu_star_auto_${SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(date)}.$EXTENSION"
+}
+
+object LocalBackupStore {
+    const val FOLDER_NAME = "Backups"
+
+    fun backupDir(context: Context): File {
+        val mediaRoot = context.externalMediaDirs.firstOrNull()
+            ?: context.getExternalFilesDir(null)
+            ?: context.filesDir
+        return File(mediaRoot, FOLDER_NAME).apply { mkdirs() }
+    }
+
+    fun backupFile(context: Context, fileName: String = BackupFileConfig.dailyAutoFileName()): File =
+        File(backupDir(context), fileName)
+}
 
 class DataSyncManager(
     private val context: Context,
@@ -117,6 +147,67 @@ class DataSyncManager(
         }
     }
 
+    suspend fun exportBackupToUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        lastErrorMessage = null
+        try {
+            val backupBytes = encryptedPayloadBytes(buildPayload())
+            val resolver = context.contentResolver
+            val opened = runCatching { resolver.openOutputStream(uri, "wt") }.getOrNull()
+                ?: resolver.openOutputStream(uri)
+            if (opened == null) {
+                lastErrorMessage = "Unable to open the selected backup file for writing."
+                return@withContext false
+            }
+            opened.use { it.write(backupBytes) }
+            true
+        } catch (e: Exception) {
+            lastErrorMessage = fileBackupErrorMessage(e)
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun mergeBackupFromUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        lastErrorMessage = null
+        try {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                ByteArrayOutputStream().use { output ->
+                    input.copyTo(output)
+                    output.toByteArray()
+                }
+            }
+            if (bytes == null || bytes.isEmpty()) {
+                lastErrorMessage = "Unable to read the selected backup file."
+                return@withContext false
+            }
+            val remotePayload = readPayload(bytes)
+            if (remotePayload == null) {
+                lastErrorMessage = "Backup file could not be read. Please select a valid Abu Star backup file."
+                return@withContext false
+            }
+            smartMerge(remotePayload)
+            true
+        } catch (e: Exception) {
+            lastErrorMessage = fileBackupErrorMessage(e)
+            e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun exportAutoBackupFile(fileName: String = BackupFileConfig.dailyAutoFileName()): Boolean =
+        withContext(Dispatchers.IO) {
+            lastErrorMessage = null
+            try {
+                val backupFile = LocalBackupStore.backupFile(context, fileName)
+                writeEncryptedPayload(backupFile, buildPayload())
+                true
+            } catch (e: Exception) {
+                lastErrorMessage = fileBackupErrorMessage(e)
+                e.printStackTrace()
+                false
+            }
+        }
+
     private fun backupErrorMessage(error: Exception): String {
         val clean = error.message?.trim().orEmpty()
         return when {
@@ -135,8 +226,12 @@ class DataSyncManager(
     }
 
     private fun writeEncryptedPayload(file: File, payload: SyncPayload) {
+        file.writeBytes(encryptedPayloadBytes(payload))
+    }
+
+    private fun encryptedPayloadBytes(payload: SyncPayload): ByteArray {
         val jsonBytes = gson.toJson(payload).toByteArray(Charsets.UTF_8)
-        file.writeBytes(keystoreManager.encryptPortableBackupBytes(jsonBytes))
+        return keystoreManager.encryptPortableBackupBytes(jsonBytes)
     }
 
     private fun readPayload(file: File): SyncPayload? {
@@ -145,6 +240,27 @@ class DataSyncManager(
             gson.fromJson(decrypted, SyncPayload::class.java)
         } catch (_: Exception) {
             runCatching { gson.fromJson(file.readText(), SyncPayload::class.java) }.getOrNull()
+        }
+    }
+
+    private fun readPayload(bytes: ByteArray): SyncPayload? {
+        return try {
+            val decrypted = keystoreManager.decryptBackupBytes(bytes).toString(Charsets.UTF_8)
+            gson.fromJson(decrypted, SyncPayload::class.java)
+        } catch (_: Exception) {
+            runCatching { gson.fromJson(bytes.toString(Charsets.UTF_8), SyncPayload::class.java) }.getOrNull()
+        }
+    }
+
+    private fun fileBackupErrorMessage(error: Exception): String {
+        val clean = error.message?.trim().orEmpty()
+        return when {
+            clean.contains("permission", ignoreCase = true) ->
+                "File permission was denied. Please choose the backup file again."
+            clean.contains("No such file", ignoreCase = true) ->
+                "Backup file was not found. Please choose the backup file again."
+            clean.isNotBlank() -> clean
+            else -> "Backup file operation failed. Please try again."
         }
     }
 

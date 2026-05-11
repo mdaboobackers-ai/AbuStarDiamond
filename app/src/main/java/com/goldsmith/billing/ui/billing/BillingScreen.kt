@@ -148,7 +148,7 @@ class BillingViewModel @Inject constructor(
             if (!GoldCalc.isValidDecimal(item.purityPercent, allowZero = false)) errors["purity_$idx"] = "Enter valid number"
             if (!GoldCalc.isValidDecimal(item.makingPerGram)) errors["making_$idx"] = "Enter valid number"
         }
-        if (!GoldCalc.isValidDecimal(cashPaid)) errors["cash"] = "Enter valid number"
+        if (!GoldCalc.isValidOptionalDecimal(cashPaid)) errors["cash"] = "Enter valid number"
         goldPayments.forEachIndexed { idx, payment ->
             if (payment.grams.isNotBlank() && !GoldCalc.isValidDecimal(payment.grams, allowZero = false)) {
                 errors["gold_$idx"] = "Enter valid number"
@@ -169,7 +169,7 @@ class BillingViewModel @Inject constructor(
         val gstAmount = subtotal * gst / 100.0
         val total = subtotal + gstAmount
         
-        val cash = cashPaid.toDoubleOrNull() ?: 0.0
+        val cash = GoldCalc.decimalOrZero(cashPaid)
         val payableGoldPayments = goldPayments.filter { it.gramsValue > 0.0 }
         val goldGrams = payableGoldPayments.sumOf { it.gramsValue }
         val goldPaidVal = payableGoldPayments.sumOf { GoldCalc.goldPaymentValue(it.gramsValue, it.karat, rate) }
@@ -788,7 +788,7 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
     val subtotal = viewModel.totalAmount(settings.goldRate24K)
     val gstAmount = subtotal * settings.gstPercent / 100.0
     val total = subtotal + gstAmount
-    val cashP = viewModel.cashPaid.toDoubleOrNull() ?: 0.0
+    val cashP = GoldCalc.decimalOrZero(viewModel.cashPaid)
     val goldPaidValue = viewModel.totalGoldPaidValue(settings.goldRate24K)
     val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0
     val payableTotal = GoldCalc.payableWithPreviousBalance(total, previousBalance)
@@ -927,7 +927,7 @@ private fun ReviewStep(viewModel: BillingViewModel, settings: com.goldsmith.bill
     val subtotal = viewModel.totalAmount(settings.goldRate24K)
     val gstAmount = subtotal * settings.gstPercent / 100.0
     val total = subtotal + gstAmount
-    val cashP = viewModel.cashPaid.toDoubleOrNull() ?: 0.0
+    val cashP = GoldCalc.decimalOrZero(viewModel.cashPaid)
     val goldPaidPure = viewModel.totalGoldPaidPure()
     val goldPaidValue = viewModel.totalGoldPaidValue(settings.goldRate24K)
     val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0

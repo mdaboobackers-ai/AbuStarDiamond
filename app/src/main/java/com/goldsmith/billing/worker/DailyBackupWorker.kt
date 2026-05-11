@@ -8,8 +8,8 @@ import com.goldsmith.billing.data.repository.SettingsRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.io.File
 
 @HiltWorker
 class DailyBackupWorker @AssistedInject constructor(
@@ -20,8 +20,12 @@ class DailyBackupWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            val settings = settingsRepo.settingsFlow.first()
+            if (!settings.autoBackupEnabled) {
+                return@withContext Result.success()
+            }
             val syncManager = com.goldsmith.billing.util.DataSyncManager(applicationContext)
-            val success = syncManager.performBackup()
+            val success = syncManager.exportAutoBackupFile()
             
             if (success) {
                 settingsRepo.updateLastBackupTime(System.currentTimeMillis())
