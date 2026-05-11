@@ -41,6 +41,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.io.File
 import javax.inject.Inject
 
 sealed class BackupState {
@@ -107,6 +108,21 @@ class BackupViewModel @Inject constructor(
         settingsRepo.setAutoBackupEnabled(enabled)
     }
 
+    fun testLatestAutoBackup(file: File?) = viewModelScope.launch {
+        if (file == null) {
+            _backupState.value = BackupState.Error("No auto backup file found yet")
+            return@launch
+        }
+        _backupState.value = BackupState.Running("Testing backup")
+        val manager = DataSyncManager(context)
+        val valid = manager.validateBackupFile(file)
+        _backupState.value = if (valid) {
+            BackupState.Success("Test restore passed. Backup file is readable")
+        } else {
+            BackupState.Error(manager.lastErrorMessage ?: "Backup test failed")
+        }
+    }
+
     fun resetState() {
         _backupState.value = BackupState.Idle
     }
@@ -122,6 +138,10 @@ fun BackupScreen(
     val settings by viewModel.settings.collectAsState()
     val backupState by viewModel.backupState.collectAsState()
     val sdf = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
+    var latestAutoBackup by remember { mutableStateOf(LocalBackupStore.latestBackupFile(context)) }
+    fun refreshLatestAutoBackup() {
+        latestAutoBackup = LocalBackupStore.latestBackupFile(context)
+    }
 
     BackHandler { onBack() }
 
@@ -130,6 +150,7 @@ fun BackupScreen(
     ) { uri ->
         if (uri != null) viewModel.saveBackup(uri)
         else viewModel.resetState()
+        refreshLatestAutoBackup()
     }
 
     val openBackupLauncher = rememberLauncherForActivityResult(
@@ -268,6 +289,12 @@ fun BackupScreen(
                             )
                         }
                         BackupLocationPill("Auto folder: $autoBackupPath")
+                        BackupHealthPanel(
+                            latestFile = latestAutoBackup,
+                            onTestRestore = { viewModel.testLatestAutoBackup(latestAutoBackup) },
+                            onRefresh = ::refreshLatestAutoBackup,
+                            enabled = backupState !is BackupState.Running
+                        )
                         AnimatedVisibility(settings.backupDocumentUri.isNotBlank()) {
                             BackupLocationPill(settings.backupDocumentUri)
                         }
@@ -294,6 +321,82 @@ fun BackupScreen(
         }
     }
 }
+
+@Composable
+private fun BackupHealthPanel(
+    latestFile: File?,
+    onTestRestore: () -> Unit,
+    onRefresh: () -> Unit,
+    enabled: Boolean
+) {
+    val stale = LocalBackupStore.isStale(latestFile)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                if (stale) AuraColors.Error.copy(alpha = 0.08f) else AuraColors.Primary.copy(alpha = 0.08f),
+                RoundedCornerShape(14.dp)
+            )
+            .border(
+                1.dp,
+                if (stale) AuraColors.Error.copy(alpha = 0.25f) else AuraColors.Primary.copy(alpha = 0.25f),
+                RoundedCornerShape(14.dp)
+            )
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Backup Health", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+            Icon(if (stale) Icons.Default.Warning else Icons.Default.Verified, null, tint = if (stale) AuraColors.Error else AuraColors.Primary, modifier = Modifier.size(20.dp))
+        }
+        Text(
+            latestFile?.name ?: "No auto backup file found",
+            style = MaterialTheme.typography.labelSmall,
+            color = AuraColors.OnSurfaceVariant,
+            fontSize = 11.sp
+        )
+        Text(
+            if (latestFile != null)
+                "Size ${formatBytes(latestFile.length())} • ${SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(latestFile.lastModified()))}"
+            else
+                "Auto backup will create the first file around 1:00 AM.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = AuraColors.OnSurfaceVariant.copy(alpha = 0.72f)
+        )
+        if (stale) {
+            Text(
+                "Warning: no fresh auto backup in the last 2 days.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AuraColors.Error
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = onTestRestore,
+                enabled = enabled && latestFile != null,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
+                border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Icon(Icons.Default.FactCheck, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("TEST RESTORE", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp)
+            }
+            TextButton(onClick = onRefresh, enabled = enabled) {
+                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Refresh", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String =
+    when {
+        bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
 
 @Composable
 private fun BackupHeroCard(

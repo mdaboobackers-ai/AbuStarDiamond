@@ -174,4 +174,17 @@ class BillingLogicTest {
         assertEquals(0.0, GoldCalc.decimalOrZero(""), 0.001)
         assertEquals(1250.75, GoldCalc.decimalOrZero("1250.75"), 0.001)
     }
+
+    @Test
+    fun `cash payments round paise to nearest rupee`() {
+        assertEquals(1251.0, GoldCalc.cashOrZero("1250.75"), 0.001)
+        assertEquals(1250.0, GoldCalc.cashOrZero("1250.49"), 0.001)
+        assertEquals(0.0, GoldCalc.cashOrZero(""), 0.001)
+    }
+
+    @Test
+    fun `money totals are stored as whole rupees`() {
+        assertEquals(1001.0, GoldCalc.roundMoney(1000.50), 0.001)
+        assertEquals(1000.0, GoldCalc.roundMoney(1000.49), 0.001)
+    }
 }

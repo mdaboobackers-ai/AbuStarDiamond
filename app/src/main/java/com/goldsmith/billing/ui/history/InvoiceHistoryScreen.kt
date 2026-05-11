@@ -82,7 +82,10 @@ class HistoryViewModel @Inject constructor(
     val filteredInvoices: StateFlow<List<Invoice>> = combine(_query, _dateFilter, allInvoices) { q, df, all ->
         var result = all
         if (q.isNotEmpty()) result = result.filter {
-            it.invoiceNumber.contains(q, true)
+            it.invoiceNumber.contains(q, true) ||
+                it.customerShopName.contains(q, true) ||
+                it.customerOwnerName.contains(q, true) ||
+                it.customerPhone.contains(q, true)
         }
         val cal = Calendar.getInstance()
         result = when (df) {
@@ -151,9 +154,10 @@ class HistoryViewModel @Inject constructor(
     }
 
     fun addPayment(invoice: Invoice, amount: Double, gold: Double, karat: Int, mode: String, attachmentUris: List<String>) = viewModelScope.launch {
+        val cashAmount = if (mode == "CASH") GoldCalc.roundMoney(amount) else 0.0
         val payment = InvoicePayment(
             invoiceId = invoice.id,
-            amount = amount,
+            amount = cashAmount,
             goldGrams = gold,
             goldKarat = karat,
             paymentMode = mode,
@@ -167,26 +171,20 @@ class HistoryViewModel @Inject constructor(
             invoiceRemainingBalance = invoice.remainingBalance,
             invoiceRate24K = invoiceRate,
             currentRate24K = currentRate,
-            cashPaid = amount,
+            cashPaid = cashAmount,
             goldGrams = gold,
             goldKarat = karat
         )
 
         val updatedInvoice = invoice.copy(
             remainingBalance = newRemaining,
-            cashPaid = invoice.cashPaid + amount,
+            cashPaid = invoice.cashPaid + cashAmount,
             goldPaidGrams = invoice.goldPaidGrams + gold,
             paymentStatus = if (newRemaining <= 0) PaymentStatus.PAID else PaymentStatus.PARTIAL
         )
         invoiceDao.updateInvoice(updatedInvoice)
 
-        customerDao.getCustomerById(invoice.customerId)?.let { customer ->
-            customerDao.updateCustomer(customer.copy(
-                goldBalanceGrams = customer.goldBalanceGrams - GoldCalc.pureGoldFromKarat(gold, karat),
-                updatedAt = Date()
-            ))
-        }
-        recalculateCustomerCashBalance(invoice.customerId, currentRate)
+        recalculateCustomerBalances(invoice.customerId, currentRate)
         if (mode == "GOLD" && gold > 0.0) {
             val expectedPurity = (karat / 24.0) * 100.0
             val expectedPure = GoldCalc.pureGoldFromKarat(gold, karat)
@@ -206,8 +204,9 @@ class HistoryViewModel @Inject constructor(
     }
 
     fun updatePayment(invoice: Invoice, payment: InvoicePayment, amount: Double, gold: Double, karat: Int, mode: String, attachmentUris: List<String>) = viewModelScope.launch {
+        val cashAmount = if (mode == "CASH") GoldCalc.roundMoney(amount) else 0.0
         val updatedPayment = payment.copy(
-            amount = if (mode == "CASH") amount else 0.0,
+            amount = cashAmount,
             goldGrams = if (mode == "GOLD") gold else 0.0,
             goldKarat = karat,
             paymentMode = mode,
@@ -242,15 +241,7 @@ class HistoryViewModel @Inject constructor(
             updatedAt = Date()
         ))
 
-        customerDao.getCustomerById(invoice.customerId)?.let { customer ->
-            val oldPure = GoldCalc.pureGoldFromKarat(payment.goldGrams, payment.goldKarat)
-            val newPure = GoldCalc.pureGoldFromKarat(updatedPayment.goldGrams, updatedPayment.goldKarat)
-            customerDao.updateCustomer(customer.copy(
-                goldBalanceGrams = customer.goldBalanceGrams + oldPure - newPure,
-                updatedAt = Date()
-            ))
-        }
-        recalculateCustomerCashBalance(invoice.customerId, currentRate)
+        recalculateCustomerBalances(invoice.customerId, currentRate)
 
         val linkedMeltingRecords = meltingDao.getMeltingRecordsByPayment(payment.id)
         if (mode == "GOLD" && updatedPayment.goldGrams > 0.0) {
@@ -306,27 +297,26 @@ class HistoryViewModel @Inject constructor(
             paymentStatus = if (newRemaining <= 0) PaymentStatus.PAID else if (newRemaining < invoice.totalAmount) PaymentStatus.PARTIAL else PaymentStatus.PENDING,
             updatedAt = Date()
         ))
-        customerDao.getCustomerById(invoice.customerId)?.let { customer ->
-            customerDao.updateCustomer(customer.copy(
-                goldBalanceGrams = customer.goldBalanceGrams + GoldCalc.pureGoldFromKarat(payment.goldGrams, payment.goldKarat),
-                updatedAt = Date()
-            ))
-        }
-        recalculateCustomerCashBalance(invoice.customerId, currentRate)
+        recalculateCustomerBalances(invoice.customerId, currentRate)
         if (payment.paymentMode == "GOLD") {
             meltingDao.deleteMeltingRecordsByPayment(payment.id)
         }
     }
 
-    private suspend fun recalculateCustomerCashBalance(customerId: Long, currentRate24K: Double) {
+    private suspend fun recalculateCustomerBalances(customerId: Long, currentRate24K: Double) {
         val customer = customerDao.getCustomerById(customerId) ?: return
-        val cashBalance = invoiceDao.getInvoicesByCustomerSync(customerId)
+        val openInvoices = invoiceDao.getInvoicesByCustomerSync(customerId)
             .filter { it.paymentStatus != PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+        val cashBalance = openInvoices
             .sumOf { invoice ->
                 val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
                 GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
             }
-        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), updatedAt = Date()))
+        val goldBalance = openInvoices.sumOf { invoice ->
+            val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
+            GoldCalc.balancePureGold(invoice.remainingBalance, invoiceRate)
+        }
+        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), goldBalanceGrams = goldBalance, updatedAt = Date()))
     }
 }
 
@@ -495,6 +485,7 @@ fun InvoiceHistoryScreen(
 @Composable
 fun InvoiceCard(invoice: Invoice, onClick: () -> Unit) {
     val sdf = remember { SimpleDateFormat("MMM dd, yyyy • HH:mm", Locale.getDefault()) }
+    val customerLabel = invoice.customerShopName.ifBlank { invoice.customerOwnerName }
     val karatLabel = when {
         invoice.totalFineGoldGrams > 0 -> "Gold Items"
         else -> "—"
@@ -537,6 +528,15 @@ fun InvoiceCard(invoice: Invoice, onClick: () -> Unit) {
 
                     Column {
                         Text("#${invoice.invoiceNumber}", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        if (customerLabel.isNotBlank()) {
+                            Text(
+                                customerLabel,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuraColors.OnSurfaceVariant,
+                                fontSize = 11.sp,
+                                maxLines = 1
+                            )
+                        }
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Icon(Icons.Default.Schedule, null, tint = AuraColors.OnSurface.copy(alpha = 0.4f), modifier = Modifier.size(12.dp))
                             Text(sdf.format(invoice.date), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface.copy(alpha = 0.4f), fontSize = 10.sp)

@@ -42,6 +42,7 @@ object BackupFileConfig {
 
 object LocalBackupStore {
     const val FOLDER_NAME = "Backups"
+    const val STALE_BACKUP_DAYS = 2L
 
     fun backupDir(context: Context): File {
         val mediaRoot = context.externalMediaDirs.firstOrNull()
@@ -52,6 +53,16 @@ object LocalBackupStore {
 
     fun backupFile(context: Context, fileName: String = BackupFileConfig.dailyAutoFileName()): File =
         File(backupDir(context), fileName)
+
+    fun backupFiles(context: Context): List<File> =
+        backupDir(context).listFiles { file -> file.isFile && file.extension.equals(BackupFileConfig.EXTENSION, ignoreCase = true) }
+            .orEmpty()
+            .sortedByDescending { it.lastModified() }
+
+    fun latestBackupFile(context: Context): File? = backupFiles(context).firstOrNull()
+
+    fun isStale(file: File?, nowMillis: Long = System.currentTimeMillis()): Boolean =
+        file == null || nowMillis - file.lastModified() > java.util.concurrent.TimeUnit.DAYS.toMillis(STALE_BACKUP_DAYS)
 }
 
 class DataSyncManager(
@@ -190,6 +201,26 @@ class DataSyncManager(
         } catch (e: Exception) {
             lastErrorMessage = fileBackupErrorMessage(e)
             e.printStackTrace()
+            false
+        }
+    }
+
+    suspend fun validateBackupFile(file: File): Boolean = withContext(Dispatchers.IO) {
+        lastErrorMessage = null
+        try {
+            if (!file.exists() || file.length() <= 0L) {
+                lastErrorMessage = "Backup file is missing or empty."
+                return@withContext false
+            }
+            val payload = readPayload(file)
+            if (payload == null) {
+                lastErrorMessage = "Backup file could not be read. It may be damaged."
+                false
+            } else {
+                true
+            }
+        } catch (e: Exception) {
+            lastErrorMessage = fileBackupErrorMessage(e)
             false
         }
     }

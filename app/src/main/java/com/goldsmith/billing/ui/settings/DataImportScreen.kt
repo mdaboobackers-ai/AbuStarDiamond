@@ -200,7 +200,7 @@ class DataImportViewModel @Inject constructor(
             }
             val subtotal = billDrafts.sumOf { it.itemAmount }
             val totalFine = GoldCalc.roundGrams(billDrafts.sumOf { it.gramsWithMaking })
-            val cashPaid = first.pick("cash_paid", "cashpaid", "paid", "payment").toDoubleOrNull() ?: 0.0
+            val cashPaid = GoldCalc.roundMoney(first.pick("cash_paid", "cashpaid", "paid", "payment").toDoubleOrNull() ?: 0.0)
             val total = GoldCalc.roundMoney(subtotal + (subtotal * gst / 100.0))
             val remaining = GoldCalc.remainingAfterSettlement(total, cashPaid, 0.0)
             val invoiceNo = first.pick("invoice_no", "invoice", "bill_no", "billno").ifBlank { settingsRepo.nextInvoiceNumber(settings.userPrefix) }
@@ -238,22 +238,27 @@ class DataImportViewModel @Inject constructor(
                     )
                 )
             }
-            recalculateCustomerCashBalance(customer.id, rate)
+            recalculateCustomerBalances(customer.id, rate)
             imported++
             skipped += itemPreview.skipped
         }
         return DataImportState(message = "Billing import completed", imported = imported, skipped = skipped)
     }
 
-    private suspend fun recalculateCustomerCashBalance(customerId: Long, currentRate24K: Double) {
+    private suspend fun recalculateCustomerBalances(customerId: Long, currentRate24K: Double) {
         val customer = customerDao.getCustomerById(customerId) ?: return
-        val cashBalance = invoiceDao.getInvoicesByCustomerSync(customerId)
+        val openInvoices = invoiceDao.getInvoicesByCustomerSync(customerId)
             .filter { it.paymentStatus != PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+        val cashBalance = openInvoices
             .sumOf { invoice ->
                 val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
                 GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
             }
-        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), updatedAt = Date()))
+        val goldBalance = openInvoices.sumOf { invoice ->
+            val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
+            GoldCalc.balancePureGold(invoice.remainingBalance, invoiceRate)
+        }
+        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), goldBalanceGrams = GoldCalc.roundGrams(goldBalance), updatedAt = Date()))
     }
 
     private fun templateBytes(mode: ImportMode): ByteArray =

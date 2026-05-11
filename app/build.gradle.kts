@@ -13,8 +13,8 @@ android {
         applicationId = "com.goldsmith.billing"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "3.0.0-r4"
+        versionCode = 7
+        versionName = "4.0.0-r1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -29,6 +29,11 @@ android {
         debug {
             isDebuggable = true
             applicationIdSuffix = ".debug"
+        }
+        create("upgrade") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ""
+            matchingFallbacks += listOf("debug")
         }
         release {
             isMinifyEnabled = true

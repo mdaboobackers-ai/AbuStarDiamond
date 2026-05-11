@@ -27,6 +27,7 @@ import com.goldsmith.billing.data.dao.InvoicePaymentDao
 import com.goldsmith.billing.data.dao.MeltingDao
 import com.goldsmith.billing.data.model.Customer
 import com.goldsmith.billing.data.model.Invoice
+import com.goldsmith.billing.data.model.PaymentStatus
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
@@ -51,19 +52,43 @@ class CustomerViewModel @Inject constructor(
     val query = _query.asStateFlow()
 
     @OptIn(FlowPreview::class)
-    val customers: StateFlow<List<Customer>> = _query
+    private val rawCustomers: Flow<List<Customer>> = _query
         .debounce(300)
         .flatMapLatest { q ->
             if (q.isEmpty()) customerDao.getAllCustomers()
             else customerDao.searchCustomers(q)
         }
+
+    val settings = settingsRepo.settingsFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, com.goldsmith.billing.data.repository.AppSettings())
+
+    val customers: StateFlow<List<Customer>> = combine(
+        rawCustomers,
+        invoiceDao.getAllInvoices(),
+        settings
+    ) { customers, invoices, appSettings ->
+        val invoicesByCustomer = invoices.groupBy { it.customerId }
+        customers.map { customer ->
+            val openInvoices = invoicesByCustomer[customer.id].orEmpty()
+                .filter { it.paymentStatus != PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+            val cashBalance = openInvoices.sumOf { invoice ->
+                val invoiceRate = invoice.goldRate24K.takeIf { rate -> rate > 0.0 } ?: appSettings.goldRate24K
+                GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, appSettings.goldRate24K)
+            }
+            val goldBalance = openInvoices.sumOf { invoice ->
+                val invoiceRate = invoice.goldRate24K.takeIf { rate -> rate > 0.0 } ?: appSettings.goldRate24K
+                GoldCalc.balancePureGold(invoice.remainingBalance, invoiceRate)
+            }
+            customer.copy(
+                cashBalance = GoldCalc.roundMoney(cashBalance),
+                goldBalanceGrams = GoldCalc.roundGrams(goldBalance)
+            )
+        }
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val totalCustomers = customerDao.getCustomerCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0)
-
-    val settings = settingsRepo.settingsFlow
-        .stateIn(viewModelScope, SharingStarted.Eagerly, com.goldsmith.billing.data.repository.AppSettings())
 
     fun setQuery(q: String) { _query.value = q }
 
@@ -250,8 +275,18 @@ fun CustomerCard(customer: Customer, onViewLedger: () -> Unit, onQuickBill: () -
             }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                WalletMetric("Gold Wallet", "${String.format("%.3f", customer.goldBalanceGrams)}g", Modifier.weight(1f))
-                WalletMetric("Cash Ledger", "₹${String.format("%,.0f", customer.cashBalance)}", Modifier.weight(1f))
+                WalletMetric(
+                    label = balanceLabel(customer.goldBalanceGrams, "Gold Due", "Gold Credit", "Gold Wallet"),
+                    value = "${String.format("%.3f", kotlin.math.abs(customer.goldBalanceGrams))}g",
+                    modifier = Modifier.weight(1f),
+                    valueColor = balanceColor(customer.goldBalanceGrams)
+                )
+                WalletMetric(
+                    label = balanceLabel(customer.cashBalance, "Cash Due", "Cash Credit", "Cash Ledger"),
+                    value = "₹${String.format("%,.0f", kotlin.math.abs(customer.cashBalance))}",
+                    modifier = Modifier.weight(1f),
+                    valueColor = balanceColor(customer.cashBalance)
+                )
             }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -267,7 +302,12 @@ fun CustomerCard(customer: Customer, onViewLedger: () -> Unit, onQuickBill: () -
 }
 
 @Composable
-private fun WalletMetric(label: String, value: String, modifier: Modifier = Modifier) {
+private fun WalletMetric(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    valueColor: Color = AuraColors.OnSurface
+) {
     Column(
         modifier
             .background(AuraColors.GlassWhite5, RoundedCornerShape(10.dp))
@@ -276,9 +316,23 @@ private fun WalletMetric(label: String, value: String, modifier: Modifier = Modi
     ) {
         Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.45f), fontSize = 8.sp)
         Spacer(Modifier.height(4.dp))
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+        Text(value, style = MaterialTheme.typography.bodyMedium, color = valueColor, fontWeight = FontWeight.SemiBold)
     }
 }
+
+private fun balanceLabel(value: Double, dueLabel: String, creditLabel: String, neutralLabel: String): String =
+    when {
+        value > 0.005 -> dueLabel
+        value < -0.005 -> creditLabel
+        else -> neutralLabel
+    }
+
+private fun balanceColor(value: Double): Color =
+    when {
+        value > 0.005 -> AuraColors.Error
+        value < -0.005 -> AuraColors.Primary
+        else -> AuraColors.OnSurface
+    }
 
 @Composable
 fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> Unit, viewModel: CustomerViewModel = hiltViewModel()) {
@@ -373,13 +427,13 @@ private fun buildCustomerTimeline(
     melting: List<com.goldsmith.billing.data.model.MeltingRecord>
 ): List<CustomerLedgerEntry> {
     val invoiceEntries = invoices.map {
-        CustomerLedgerEntry("Invoice ${it.invoiceNumber}", "Eq gold billed ${String.format("%.3f", it.totalFineGoldGrams)}g", "₹${String.format("%,.0f", it.totalAmount)}", it.date, true)
+        CustomerLedgerEntry("Invoice ${it.invoiceNumber}", "Bill added, Eq gold ${String.format("%.3f", it.totalFineGoldGrams)}g", "₹${String.format("%,.0f", kotlin.math.abs(it.totalAmount))}", it.date, true)
     }
     val paymentEntries = payments.map {
         if (it.paymentMode == "GOLD") {
-            CustomerLedgerEntry("Gold payment", "${it.goldKarat}K received", "${String.format("%.3f", it.goldGrams)}g", it.date, false)
+            CustomerLedgerEntry("Gold received", "${it.goldKarat}K payment", "${String.format("%.3f", kotlin.math.abs(it.goldGrams))}g", it.date, false)
         } else {
-            CustomerLedgerEntry("Cash payment", "Payment received", "₹${String.format("%,.0f", it.amount)}", it.date, false)
+            CustomerLedgerEntry("Cash received", "Payment received", "₹${String.format("%,.0f", kotlin.math.abs(it.amount))}", it.date, false)
         }
     }
     val meltingEntries = melting.map {

@@ -121,18 +121,20 @@ class MeltingViewModel @Inject constructor(
                 invoice.remainingBalance
             }
         }
-        customerDao.getCustomerById(normalizedRecord.customerId)?.let { customer ->
-            val newGoldBalance = if (previous == null) {
-                customer.goldBalanceGrams - normalizedRecord.finalPureWeightGrams
-            } else {
-                customer.goldBalanceGrams + previous.finalPureWeightGrams - normalizedRecord.finalPureWeightGrams
+        if (linkedInvoice == null) {
+            customerDao.getCustomerById(normalizedRecord.customerId)?.let { customer ->
+                val newGoldBalance = if (previous == null) {
+                    customer.goldBalanceGrams - normalizedRecord.finalPureWeightGrams
+                } else {
+                    customer.goldBalanceGrams + previous.finalPureWeightGrams - normalizedRecord.finalPureWeightGrams
+                }
+                customerDao.updateCustomer(customer.copy(
+                    goldBalanceGrams = newGoldBalance,
+                    updatedAt = Date()
+                ))
             }
-            customerDao.updateCustomer(customer.copy(
-                goldBalanceGrams = newGoldBalance,
-                updatedAt = Date()
-            ))
         }
-        linkedInvoice?.let { recalculateCustomerCashBalance(normalizedRecord.customerId, it.goldRate24K) }
+        linkedInvoice?.let { recalculateCustomerBalances(normalizedRecord.customerId, it.goldRate24K) }
         onDone()
     }
 
@@ -151,15 +153,20 @@ class MeltingViewModel @Inject constructor(
         }
     }
 
-    private suspend fun recalculateCustomerCashBalance(customerId: Long, fallbackRate24K: Double) {
+    private suspend fun recalculateCustomerBalances(customerId: Long, fallbackRate24K: Double) {
         val customer = customerDao.getCustomerById(customerId) ?: return
-        val cashBalance = invoiceDao.getInvoicesByCustomerSync(customerId)
+        val openInvoices = invoiceDao.getInvoicesByCustomerSync(customerId)
             .filter { it.paymentStatus != com.goldsmith.billing.data.model.PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+        val cashBalance = openInvoices
             .sumOf { invoice ->
                 val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: fallbackRate24K
                 GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, fallbackRate24K)
             }
-        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), updatedAt = Date()))
+        val goldBalance = openInvoices.sumOf { invoice ->
+            val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: fallbackRate24K
+            GoldCalc.balancePureGold(invoice.remainingBalance, invoiceRate)
+        }
+        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), goldBalanceGrams = GoldCalc.roundGrams(goldBalance), updatedAt = Date()))
     }
 }
 

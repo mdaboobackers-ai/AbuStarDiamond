@@ -149,11 +149,14 @@ object GoldCalc {
     fun decimalOrZero(value: String): Double =
         value.trim().takeIf { it.isNotEmpty() }?.toDoubleOrNull() ?: 0.0
 
+    fun cashOrZero(value: String): Double =
+        roundMoney(decimalOrZero(value))
+
     fun roundGrams(value: Double): Double =
         BigDecimal.valueOf(value).setScale(3, RoundingMode.HALF_UP).toDouble()
 
     fun roundMoney(value: Double): Double =
-        BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).toDouble()
+        BigDecimal.valueOf(value).setScale(0, RoundingMode.HALF_UP).toDouble()
 }
 
 data class GoldBalance(
@@ -165,8 +168,8 @@ fun Double.formatGrams(decimals: Int = 3): String = String.format("%.${decimals}
 
 fun Double.formatCurrency(): String {
     val nf = NumberFormat.getNumberInstance(Locale("en", "IN"))
-    nf.minimumFractionDigits = 2
-    nf.maximumFractionDigits = 2
+    nf.minimumFractionDigits = 0
+    nf.maximumFractionDigits = 0
     return "₹${nf.format(this)}"
 }
 

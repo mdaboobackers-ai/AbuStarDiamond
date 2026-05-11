@@ -165,11 +165,11 @@ class BillingViewModel @Inject constructor(
         val rate = s.goldRate24K
         val gst = s.gstPercent
         
-        val subtotal = items.sumOf { it.amount(rate) }
-        val gstAmount = subtotal * gst / 100.0
-        val total = subtotal + gstAmount
+        val subtotal = GoldCalc.roundMoney(items.sumOf { it.amount(rate) })
+        val gstAmount = GoldCalc.roundMoney(subtotal * gst / 100.0)
+        val total = GoldCalc.roundMoney(subtotal + gstAmount)
         
-        val cash = GoldCalc.decimalOrZero(cashPaid)
+        val cash = GoldCalc.cashOrZero(cashPaid)
         val payableGoldPayments = goldPayments.filter { it.gramsValue > 0.0 }
         val goldGrams = payableGoldPayments.sumOf { it.gramsValue }
         val goldPaidVal = payableGoldPayments.sumOf { GoldCalc.goldPaymentValue(it.gramsValue, it.karat, rate) }
@@ -279,18 +279,23 @@ class BillingViewModel @Inject constructor(
         }
 
         // Update customer balance from invoice source of truth.
-        recalculateCustomerBalances(customer.id, rate, customer.goldBalanceGrams - totalGoldPaidPure())
+        recalculateCustomerBalances(customer.id, rate)
         onSaved(invoiceId)
     }
 
-    private suspend fun recalculateCustomerBalances(customerId: Long, currentRate24K: Double, goldBalance: Double) {
+    private suspend fun recalculateCustomerBalances(customerId: Long, currentRate24K: Double) {
         val customer = customerDao.getCustomerById(customerId) ?: return
-        val cashBalance = invoiceDao.getInvoicesByCustomerSync(customerId)
+        val openInvoices = invoiceDao.getInvoicesByCustomerSync(customerId)
             .filter { it.paymentStatus != PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+        val cashBalance = openInvoices
             .sumOf { invoice ->
                 val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
                 GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
             }
+        val goldBalance = openInvoices.sumOf { invoice ->
+            val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
+            GoldCalc.balancePureGold(invoice.remainingBalance, invoiceRate)
+        }
         customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), goldBalanceGrams = goldBalance, updatedAt = Date()))
     }
 }
@@ -785,10 +790,10 @@ private fun LessWeightDialog(currentLess: String, onDismiss: () -> Unit, onSave:
 // ─── Step 3: Payment ──────────────────────────────────────────────────────────
 @Composable
 private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.billing.data.repository.AppSettings) {
-    val subtotal = viewModel.totalAmount(settings.goldRate24K)
-    val gstAmount = subtotal * settings.gstPercent / 100.0
-    val total = subtotal + gstAmount
-    val cashP = GoldCalc.decimalOrZero(viewModel.cashPaid)
+    val subtotal = GoldCalc.roundMoney(viewModel.totalAmount(settings.goldRate24K))
+    val gstAmount = GoldCalc.roundMoney(subtotal * settings.gstPercent / 100.0)
+    val total = GoldCalc.roundMoney(subtotal + gstAmount)
+    val cashP = GoldCalc.cashOrZero(viewModel.cashPaid)
     val goldPaidValue = viewModel.totalGoldPaidValue(settings.goldRate24K)
     val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0
     val payableTotal = GoldCalc.payableWithPreviousBalance(total, previousBalance)
@@ -924,10 +929,10 @@ private fun GoldPaymentRow(
 
 @Composable
 private fun ReviewStep(viewModel: BillingViewModel, settings: com.goldsmith.billing.data.repository.AppSettings) {
-    val subtotal = viewModel.totalAmount(settings.goldRate24K)
-    val gstAmount = subtotal * settings.gstPercent / 100.0
-    val total = subtotal + gstAmount
-    val cashP = GoldCalc.decimalOrZero(viewModel.cashPaid)
+    val subtotal = GoldCalc.roundMoney(viewModel.totalAmount(settings.goldRate24K))
+    val gstAmount = GoldCalc.roundMoney(subtotal * settings.gstPercent / 100.0)
+    val total = GoldCalc.roundMoney(subtotal + gstAmount)
+    val cashP = GoldCalc.cashOrZero(viewModel.cashPaid)
     val goldPaidPure = viewModel.totalGoldPaidPure()
     val goldPaidValue = viewModel.totalGoldPaidValue(settings.goldRate24K)
     val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0
