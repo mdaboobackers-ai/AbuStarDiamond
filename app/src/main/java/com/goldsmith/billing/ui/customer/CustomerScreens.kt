@@ -311,32 +311,35 @@ fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> 
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
-                val goldDue = invoices.sumOf { GoldCalc.pendingPureGold(it.remainingBalance, it.goldRate24K.takeIf { rate -> rate > 0.0 } ?: settings.goldRate24K).coerceAtLeast(0.0) }
-                val cashDue = invoices.sumOf { GoldCalc.pendingCashAtRate(it.remainingBalance, it.goldRate24K.takeIf { rate -> rate > 0.0 } ?: settings.goldRate24K, settings.goldRate24K).coerceAtLeast(0.0) }
+                val netGoldBalance = invoices.sumOf { GoldCalc.balancePureGold(it.remainingBalance, it.goldRate24K.takeIf { rate -> rate > 0.0 } ?: settings.goldRate24K) }
+                val netCashBalance = invoices.sumOf { GoldCalc.balanceCashAtRate(it.remainingBalance, it.goldRate24K.takeIf { rate -> rate > 0.0 } ?: settings.goldRate24K, settings.goldRate24K) }
                 GlassCard(Modifier.fillMaxWidth(), goldBorder = true) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(customer?.companyName?.ifEmpty { customer.name } ?: "Customer Wallet", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            WalletMetric("Pure Gold Due", "${String.format("%.3f", goldDue)}g", Modifier.weight(1f))
-                            WalletMetric("Today Rate Value", "₹${String.format("%,.0f", cashDue)}", Modifier.weight(1f))
+                            WalletMetric(if (netGoldBalance >= 0.0) "Pure Gold Due" else "Pure Gold Credit", "${String.format("%.3f", kotlin.math.abs(netGoldBalance))}g", Modifier.weight(1f))
+                            WalletMetric(if (netCashBalance >= 0.0) "Today Rate Due" else "Today Rate Credit", "₹${String.format("%,.0f", kotlin.math.abs(netCashBalance))}", Modifier.weight(1f))
                         }
                     }
                 }
             }
             items(invoices) { invoice ->
                 val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K
-                val balanceGold = GoldCalc.pendingPureGold(invoice.remainingBalance, invoiceRate).coerceAtLeast(0.0)
-                val balanceTodayCash = GoldCalc.pendingCashAtRate(invoice.remainingBalance, invoiceRate, settings.goldRate24K)
+                val balanceGold = GoldCalc.balancePureGold(invoice.remainingBalance, invoiceRate)
+                val balanceTodayCash = GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, settings.goldRate24K)
                 GlassCard(Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(invoice.invoiceNumber, style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer)
                             Text("₹${String.format("%,.2f", invoice.totalAmount)}", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
-                            if (invoice.paymentStatus.name != "PAID") {
+                            if (kotlin.math.abs(invoice.remainingBalance) > 0.005) {
                                 Text(
-                                    "Due today: ₹${String.format("%,.2f", balanceTodayCash)} OR ${String.format("%.3f", balanceGold)}g pure",
+                                    if (invoice.remainingBalance >= 0.0)
+                                        "Due today: ₹${String.format("%,.2f", balanceTodayCash)} OR ${String.format("%.3f", balanceGold)}g pure"
+                                    else
+                                        "Credit: ₹${String.format("%,.2f", kotlin.math.abs(balanceTodayCash))} OR ${String.format("%.3f", kotlin.math.abs(balanceGold))}g pure",
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = AuraColors.Error
+                                    color = if (invoice.remainingBalance >= 0.0) AuraColors.Error else AuraColors.Primary
                                 )
                             }
                         }

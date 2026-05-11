@@ -117,6 +117,45 @@ class BillingLogicTest {
     }
 
     @Test
+    fun `previous balance is added to payable total and partial payment leaves correct due`() {
+        val currentBill = 100000.0
+        val previousDue = 50000.0
+        val payable = GoldCalc.payableWithPreviousBalance(currentBill, previousDue)
+        val remaining = GoldCalc.remainingAfterSettlement(payable, cashPaid = 75000.0, goldValue = 0.0)
+
+        assertEquals(150000.0, payable, 0.001)
+        assertEquals(75000.0, remaining, 0.001)
+    }
+
+    @Test
+    fun `previous credit reduces payable total and can create customer credit`() {
+        val currentBill = 100000.0
+        val previousCredit = -20000.0
+        val payable = GoldCalc.payableWithPreviousBalance(currentBill, previousCredit)
+        val remaining = GoldCalc.remainingAfterSettlement(payable, cashPaid = 90000.0, goldValue = 0.0)
+
+        assertEquals(80000.0, payable, 0.001)
+        assertEquals(-10000.0, remaining, 0.001)
+        assertEquals(-1.25, GoldCalc.balancePureGold(remaining, 8000.0), 0.001)
+        assertEquals(-10000.0, GoldCalc.balanceCashAtRate(remaining, 8000.0, 8000.0), 0.001)
+    }
+
+    @Test
+    fun `overpayment is preserved as credit not hidden as zero`() {
+        val remaining = GoldCalc.invoiceBalanceAfterPaymentAtCurrentRate(
+            invoiceRemainingBalance = 70000.0,
+            invoiceRate24K = 7000.0,
+            currentRate24K = 7000.0,
+            cashPaid = 80000.0,
+            goldGrams = 0.0,
+            goldKarat = 24
+        )
+
+        assertEquals(-10000.0, remaining, 0.001)
+        assertEquals(-10000.0, GoldCalc.balanceCashAtRate(remaining, 7000.0, 7000.0), 0.001)
+    }
+
+    @Test
     fun `decimal validation rejects invalid payment input`() {
         assertTrue(GoldCalc.isValidDecimal("12.45"))
         assertTrue(GoldCalc.isValidDecimal("0"))

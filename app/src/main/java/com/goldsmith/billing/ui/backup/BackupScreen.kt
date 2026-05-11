@@ -111,10 +111,16 @@ class BackupViewModel @Inject constructor(
                 _backupState.value = BackupState.Idle
                 return@launch
             }
+            if (!GoogleSignIn.hasPermissions(account, Scope(DriveBackupConfig.SCOPE))) {
+                onNeedSignIn()
+                _backupState.value = BackupState.Error("Google Drive permission is required. Please choose the account and allow backup access.")
+                return@launch
+            }
             val accountEmail = DriveBackupConfig.resolveActiveAccountEmail(account.email, null)
             if (accountEmail.isNotBlank()) settingsRepo.updateSelectedBackupEmail(accountEmail)
 
-            val success = task(com.goldsmith.billing.util.DataSyncManager(context, account))
+            val syncManager = com.goldsmith.billing.util.DataSyncManager(context, account)
+            val success = task(syncManager)
             if (success) {
                 val now = System.currentTimeMillis()
                 if (action != BackupAction.Restore) {
@@ -125,7 +131,7 @@ class BackupViewModel @Inject constructor(
                 }
                 _backupState.value = BackupState.Success(now, action.operation)
             } else {
-                _backupState.value = BackupState.Error("${action.operation} failed - check Google Drive access")
+                _backupState.value = BackupState.Error(syncManager.lastErrorMessage ?: "${action.operation} failed - check Google Drive access")
             }
         } catch (e: Exception) {
             _backupState.value = BackupState.Error(e.message ?: "${action.operation} failed")
@@ -158,6 +164,12 @@ fun BackupScreen(
     val signInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        if (result.resultCode != Activity.RESULT_OK) {
+            pendingCloudAction = null
+            activeAccount = GoogleSignIn.getLastSignedInAccount(context)
+            viewModel.showAccountError("Google account selection was cancelled. Please select an account to run backup.")
+            return@rememberLauncherForActivityResult
+        }
         val pickerAccount = runCatching {
             GoogleSignIn.getSignedInAccountFromIntent(result.data)
                 .getResult(ApiException::class.java)
@@ -177,9 +189,10 @@ fun BackupScreen(
                 BackupAction.Backup -> viewModel.triggerBackup(resolvedAccount) {}
                 null -> viewModel.resetState()
             }
+            pendingCloudAction = null
         } else {
             pendingCloudAction = null
-            viewModel.resetState()
+            viewModel.showAccountError("Google account was not selected. Please choose the account again.")
         }
     }
 
@@ -200,8 +213,8 @@ fun BackupScreen(
         val account = activeAccount ?: GoogleSignIn.getLastSignedInAccount(context)
         activeAccount = account
         pendingCloudAction = action
-        if (account == null) {
-            launchGoogleSignIn()
+        if (account == null || !GoogleSignIn.hasPermissions(account, Scope(DriveBackupConfig.SCOPE))) {
+            launchGoogleSignIn(forceChooseAccount = account != null)
             return
         }
         when (action) {

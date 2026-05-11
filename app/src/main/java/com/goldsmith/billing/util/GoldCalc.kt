@@ -82,6 +82,18 @@ object GoldCalc {
     fun pendingCashAtRate(invoiceRemainingBalance: Double, invoiceRate24K: Double, currentRate24K: Double): Double =
         roundMoney(pendingPureGold(invoiceRemainingBalance, invoiceRate24K).coerceAtLeast(0.0) * currentRate24K)
 
+    fun balanceCashAtRate(invoiceRemainingBalance: Double, invoiceRate24K: Double, currentRate24K: Double): Double =
+        roundMoney(pendingPureGold(invoiceRemainingBalance, invoiceRate24K) * currentRate24K)
+
+    fun balancePureGold(invoiceRemainingBalance: Double, invoiceRate24K: Double): Double =
+        roundGrams(pendingPureGold(invoiceRemainingBalance, invoiceRate24K))
+
+    fun payableWithPreviousBalance(currentBillTotal: Double, previousBalance: Double): Double =
+        roundMoney(currentBillTotal + previousBalance)
+
+    fun remainingAfterSettlement(payableTotal: Double, cashPaid: Double, goldValue: Double): Double =
+        roundMoney(payableTotal - cashPaid - goldValue)
+
     fun invoiceBalanceAfterPaymentAtCurrentRate(
         invoiceRemainingBalance: Double,
         invoiceRate24K: Double,

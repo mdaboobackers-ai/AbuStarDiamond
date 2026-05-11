@@ -174,7 +174,8 @@ class BillingViewModel @Inject constructor(
         val goldGrams = payableGoldPayments.sumOf { it.gramsValue }
         val goldPaidVal = payableGoldPayments.sumOf { GoldCalc.goldPaymentValue(it.gramsValue, it.karat, rate) }
         val prevBal = if (usePreviousBalance) customer.cashBalance else 0.0
-        val remaining = GoldCalc.roundMoney(total - cash - goldPaidVal - prevBal)
+        val payableTotal = GoldCalc.payableWithPreviousBalance(total, prevBal)
+        val remaining = GoldCalc.remainingAfterSettlement(payableTotal, cash, goldPaidVal)
 
         val invoiceNum = settingsRepo.nextInvoiceNumber(s.userPrefix)
 
@@ -193,7 +194,7 @@ class BillingViewModel @Inject constructor(
             subtotal = subtotal,
             gstPercent = gst,
             gstAmount = gstAmount,
-            totalAmount = total,
+            totalAmount = payableTotal,
             cashPaid = cash,
             goldPaidGrams = goldGrams,
             goldPaidKarat = payableGoldPayments.firstOrNull()?.karat ?: 24,
@@ -207,6 +208,24 @@ class BillingViewModel @Inject constructor(
             goldRate24K = rate
         )
         val invoiceId = invoiceDao.insertInvoice(invoice)
+
+        if (usePreviousBalance && kotlin.math.abs(prevBal) > 0.005) {
+            invoiceDao.getInvoicesByCustomerSync(customer.id)
+                .filter { it.id != invoiceId && kotlin.math.abs(it.remainingBalance) > 0.005 }
+                .forEach { oldInvoice ->
+                    invoiceDao.updateInvoice(
+                        oldInvoice.copy(
+                            remainingBalance = 0.0,
+                            paymentStatus = PaymentStatus.PAID,
+                            notes = listOf(
+                                oldInvoice.notes,
+                                "Previous balance carried into Invoice #$invoiceNum"
+                            ).filter { it.isNotBlank() }.joinToString("\n"),
+                            updatedAt = Date()
+                        )
+                    )
+                }
+        }
 
         // Save bill items
         val billItems = items.mapIndexed { _, draft ->
@@ -259,9 +278,20 @@ class BillingViewModel @Inject constructor(
             ))
         }
 
-        // Update customer balance
-        customerDao.updateCustomer(customer.copy(cashBalance = remaining, goldBalanceGrams = customer.goldBalanceGrams - totalGoldPaidPure(), updatedAt = Date()))
+        // Update customer balance from invoice source of truth.
+        recalculateCustomerBalances(customer.id, rate, customer.goldBalanceGrams - totalGoldPaidPure())
         onSaved(invoiceId)
+    }
+
+    private suspend fun recalculateCustomerBalances(customerId: Long, currentRate24K: Double, goldBalance: Double) {
+        val customer = customerDao.getCustomerById(customerId) ?: return
+        val cashBalance = invoiceDao.getInvoicesByCustomerSync(customerId)
+            .filter { it.paymentStatus != PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+            .sumOf { invoice ->
+                val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
+                GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
+            }
+        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), goldBalanceGrams = goldBalance, updatedAt = Date()))
     }
 }
 
@@ -761,8 +791,9 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
     val cashP = viewModel.cashPaid.toDoubleOrNull() ?: 0.0
     val goldPaidValue = viewModel.totalGoldPaidValue(settings.goldRate24K)
     val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0
-    val remaining = total - cashP - goldPaidValue - previousBalance
-    val remainingGold = if (settings.goldRate24K > 0) (remaining.coerceAtLeast(0.0) / settings.goldRate24K) else 0.0
+    val payableTotal = GoldCalc.payableWithPreviousBalance(total, previousBalance)
+    val remaining = GoldCalc.remainingAfterSettlement(payableTotal, cashP, goldPaidValue)
+    val remainingGold = if (settings.goldRate24K > 0) GoldCalc.roundGrams(kotlin.math.abs(remaining) / settings.goldRate24K) else 0.0
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -780,10 +811,13 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
                     SummaryRow("Sub Total Grams", "${String.format("%.3f", viewModel.totalFineGold(settings.goldRate24K))}g")
                     SummaryRow("Amount Subtotal", "₹${String.format("%,.2f", subtotal)}")
                     SummaryRow("GST (${settings.gstPercent}%)", "₹${String.format("%,.2f", gstAmount)}")
+                    if (viewModel.usePreviousBalance) {
+                        SummaryRow("Previous Balance", "₹${String.format("%,.2f", previousBalance)}", if (previousBalance >= 0.0) AuraColors.Error else AuraColors.Primary)
+                    }
                     HorizontalDivider(color = AuraColors.PrimaryContainer.copy(alpha = 0.3f))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("TOTAL PAYABLE", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface, letterSpacing = 1.sp)
-                        Text("₹${String.format("%,.2f", total)}", style = MaterialTheme.typography.titleLarge, color = AuraColors.PrimaryContainer, fontSize = 22.sp)
+                        Text("₹${String.format("%,.2f", payableTotal)}", style = MaterialTheme.typography.titleLarge, color = AuraColors.PrimaryContainer, fontSize = 22.sp)
                     }
                 }
             }
@@ -825,8 +859,8 @@ private fun PaymentStep(viewModel: BillingViewModel, settings: com.goldsmith.bil
                     }
                     HorizontalDivider(color = AuraColors.GlassWhite10)
                     SummaryRow(
-                        "Remaining Balance",
-                        "₹${String.format("%,.2f", remaining.coerceAtLeast(0.0))} OR ${String.format("%.3f", remainingGold)}g pure gold",
+                        if (remaining >= 0.0) "Remaining Balance" else "Customer Credit",
+                        "₹${String.format("%,.2f", kotlin.math.abs(remaining))} OR ${String.format("%.3f", remainingGold)}g pure gold",
                         valueColor = if (remaining > 0) AuraColors.Error else AuraColors.Primary
                     )
                 }
@@ -897,8 +931,9 @@ private fun ReviewStep(viewModel: BillingViewModel, settings: com.goldsmith.bill
     val goldPaidPure = viewModel.totalGoldPaidPure()
     val goldPaidValue = viewModel.totalGoldPaidValue(settings.goldRate24K)
     val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0
-    val remaining = GoldCalc.roundMoney(total - cashP - goldPaidValue - previousBalance)
-    val remainingGold = if (settings.goldRate24K > 0) GoldCalc.roundGrams(remaining.coerceAtLeast(0.0) / settings.goldRate24K) else 0.0
+    val payableTotal = GoldCalc.payableWithPreviousBalance(total, previousBalance)
+    val remaining = GoldCalc.remainingAfterSettlement(payableTotal, cashP, goldPaidValue)
+    val remainingGold = if (settings.goldRate24K > 0) GoldCalc.roundGrams(kotlin.math.abs(remaining) / settings.goldRate24K) else 0.0
 
     LazyColumn(
         Modifier.fillMaxSize(),
@@ -916,7 +951,10 @@ private fun ReviewStep(viewModel: BillingViewModel, settings: com.goldsmith.bill
                     SummaryRow("Sub Total Grams", "${String.format("%.3f", viewModel.totalFineGold(settings.goldRate24K))}g")
                     SummaryRow("Amount Subtotal", "₹${String.format("%,.2f", subtotal)}")
                     SummaryRow("GST", "₹${String.format("%,.2f", gstAmount)}")
-                    SummaryRow("Total Payable", "₹${String.format("%,.2f", total)}", AuraColors.PrimaryContainer)
+                    if (viewModel.usePreviousBalance) {
+                        SummaryRow("Previous Balance", "₹${String.format("%,.2f", previousBalance)}", if (previousBalance >= 0.0) AuraColors.Error else AuraColors.Primary)
+                    }
+                    SummaryRow("Total Payable", "₹${String.format("%,.2f", payableTotal)}", AuraColors.PrimaryContainer)
                 }
             }
         }
@@ -928,8 +966,8 @@ private fun ReviewStep(viewModel: BillingViewModel, settings: com.goldsmith.bill
                     SummaryRow("Gold Paid Pure", "${String.format("%.3f", goldPaidPure)}g", AuraColors.Primary)
                     SummaryRow("Previous Balance Adjusted", "₹${String.format("%,.2f", previousBalance)}")
                     HorizontalDivider(color = AuraColors.GlassWhite10)
-                    SummaryRow("Balance Due", "₹${String.format("%,.2f", remaining.coerceAtLeast(0.0))}", if (remaining > 0) AuraColors.Error else AuraColors.Primary)
-                    SummaryRow("Balance Gold", "${String.format("%.3f", remainingGold)}g pure", if (remaining > 0) AuraColors.Error else AuraColors.Primary)
+                    SummaryRow(if (remaining >= 0.0) "Balance Due" else "Customer Credit", "₹${String.format("%,.2f", kotlin.math.abs(remaining))}", if (remaining > 0) AuraColors.Error else AuraColors.Primary)
+                    SummaryRow(if (remaining >= 0.0) "Balance Gold" else "Credit Gold", "${String.format("%.3f", remainingGold)}g pure", if (remaining > 0) AuraColors.Error else AuraColors.Primary)
                 }
             }
         }
@@ -971,6 +1009,8 @@ private fun BillingBottomBar(
 ) {
     val total = viewModel.totalAmount(settings.goldRate24K)
     val gst = total * settings.gstPercent / 100.0
+    val previousBalance = if (viewModel.usePreviousBalance) viewModel.selectedCustomer?.cashBalance ?: 0.0 else 0.0
+    val payableTotal = GoldCalc.payableWithPreviousBalance(total + gst, previousBalance)
 
     Surface(
         color = AuraColors.SurfaceContainerLowest.copy(alpha = 0.95f),
@@ -1001,7 +1041,7 @@ private fun BillingBottomBar(
                     Spacer(Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("TOTAL PAYABLE", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.5f), fontSize = 8.sp, letterSpacing = 1.sp)
-                        Text("₹${String.format("%,.2f", total + gst)}", style = MaterialTheme.typography.titleLarge, color = AuraColors.PrimaryContainer, fontSize = 18.sp)
+                        Text("₹${String.format("%,.2f", payableTotal)}", style = MaterialTheme.typography.titleLarge, color = AuraColors.PrimaryContainer, fontSize = 18.sp)
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

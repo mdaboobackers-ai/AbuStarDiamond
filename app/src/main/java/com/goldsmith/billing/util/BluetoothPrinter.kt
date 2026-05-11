@@ -49,8 +49,10 @@ object BluetoothPrinter {
 
             // Invoice Info
             esc.setAlignLeft()
-            val sdf = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
-            esc.printLine(fitLine("Inv ${invoice.invoiceNumber}", sdf.format(invoice.date)))
+            val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+            val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+            esc.printLine(fitLine(invoice.invoiceNumber, dateFormat.format(invoice.date)))
+            esc.printLine(fitLine("", timeFormat.format(invoice.date)))
             val billTo = invoice.customerShopName.ifEmpty { invoice.customerOwnerName }
             if (billTo.isNotEmpty()) esc.printLine("To: ${clip(billTo, 28)}")
             if (invoice.customerPhone.isNotEmpty()) esc.printLine("Ph: ${clip(invoice.customerPhone, 28)}")
@@ -75,12 +77,17 @@ object BluetoothPrinter {
             esc.printLine(fitLine("916 Eq.g", String.format(Locale.US, "%.3f", invoice.total916Grams)))
             esc.printLine(fitLine("Subtotal", "Rs ${String.format(Locale.US, "%.2f", invoice.subtotal)}"))
             esc.printLine(fitLine("GST ${String.format(Locale.US, "%.2f", invoice.gstPercent)}%", "Rs ${String.format(Locale.US, "%.2f", invoice.gstAmount)}"))
+            if (kotlin.math.abs(invoice.previousBalanceAdjusted) > 0.005) {
+                esc.printLine(fitLine(if (invoice.previousBalanceAdjusted >= 0.0) "Prev Bal" else "Prev Credit", "Rs ${String.format(Locale.US, "%.2f", kotlin.math.abs(invoice.previousBalanceAdjusted))}"))
+            }
             esc.setBold(true)
             esc.printLine(fitLine("TOTAL", "Rs ${String.format(Locale.US, "%.2f", invoice.totalAmount)}"))
             esc.setBold(false)
             if (invoice.cashPaid > 0.0) esc.printLine(fitLine("Cash Paid", "Rs ${String.format(Locale.US, "%.2f", invoice.cashPaid)}"))
             if (invoice.goldPaidGrams > 0.0) esc.printLine(fitLine("Gold Paid", "${String.format(Locale.US, "%.3f", invoice.goldPaidGrams)}g"))
-            if (invoice.remainingBalance > 0.0) esc.printLine(fitLine("Balance", "Rs ${String.format(Locale.US, "%.2f", invoice.remainingBalance)}"))
+            if (kotlin.math.abs(invoice.remainingBalance) > 0.005) {
+                esc.printLine(fitLine(if (invoice.remainingBalance >= 0.0) "Balance" else "Credit", "Rs ${String.format(Locale.US, "%.2f", kotlin.math.abs(invoice.remainingBalance))}"))
+            }
             esc.printLine("--------------------------------")
 
             esc.setAlignCenter()

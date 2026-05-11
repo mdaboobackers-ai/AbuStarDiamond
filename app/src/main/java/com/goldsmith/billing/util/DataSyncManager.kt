@@ -34,8 +34,11 @@ class DataSyncManager(
         .create()
     private val driveHelper = GoogleDriveHelper(context, signedInAccount)
     private val keystoreManager = KeystoreManager(context)
+    var lastErrorMessage: String? = null
+        private set
 
     suspend fun performSync(): Boolean = withContext(Dispatchers.IO) {
+        lastErrorMessage = null
         try {
             val remoteFile = File(context.cacheDir, "remote_sync.json")
             val success = driveHelper.downloadFile(DriveBackupConfig.REMOTE_FILE, remoteFile) ||
@@ -65,36 +68,69 @@ class DataSyncManager(
             
             val localFile = File(context.cacheDir, "local_sync.json")
             writeEncryptedPayload(localFile, payload)
-            driveHelper.uploadFile(localFile, DriveBackupConfig.REMOTE_FILE) != null
+            val uploaded = driveHelper.uploadFile(localFile, DriveBackupConfig.REMOTE_FILE) != null
+            if (!uploaded) lastErrorMessage = "Google Drive upload did not return a file id."
+            uploaded
         } catch (e: Exception) {
+            lastErrorMessage = backupErrorMessage(e)
             e.printStackTrace()
             false
         }
     }
 
     suspend fun performBackup(): Boolean = withContext(Dispatchers.IO) {
+        lastErrorMessage = null
         try {
             val localFile = File(context.cacheDir, "local_sync.json")
             writeEncryptedPayload(localFile, buildPayload())
-            driveHelper.uploadFile(localFile, DriveBackupConfig.REMOTE_FILE) != null
+            val uploaded = driveHelper.uploadFile(localFile, DriveBackupConfig.REMOTE_FILE) != null
+            if (!uploaded) lastErrorMessage = "Google Drive upload did not return a file id."
+            uploaded
         } catch (e: Exception) {
+            lastErrorMessage = backupErrorMessage(e)
             e.printStackTrace()
             false
         }
     }
 
     suspend fun performRestore(): Boolean = withContext(Dispatchers.IO) {
+        lastErrorMessage = null
         try {
             val remoteFile = File(context.cacheDir, "remote_sync.json")
             val downloaded = driveHelper.downloadFile(DriveBackupConfig.REMOTE_FILE, remoteFile) ||
                 driveHelper.downloadFile(DriveBackupConfig.LEGACY_REMOTE_FILE, remoteFile)
-            if (!downloaded) return@withContext false
-            val remotePayload = readPayload(remoteFile) ?: return@withContext false
+            if (!downloaded) {
+                lastErrorMessage = "No backup file was found in the selected Google account."
+                return@withContext false
+            }
+            val remotePayload = readPayload(remoteFile)
+            if (remotePayload == null) {
+                lastErrorMessage = "Backup file could not be read or decrypted."
+                return@withContext false
+            }
             smartMerge(remotePayload)
             true
         } catch (e: Exception) {
+            lastErrorMessage = backupErrorMessage(e)
             e.printStackTrace()
             false
+        }
+    }
+
+    private fun backupErrorMessage(error: Exception): String {
+        val clean = error.message?.trim().orEmpty()
+        return when {
+            error is DriveBackupException && clean.isNotBlank() -> clean
+            clean.contains("UserRecoverableAuthIOException", ignoreCase = true) ->
+                "Google Drive needs permission again. Please change account and allow Drive backup access."
+            clean.contains("401", ignoreCase = true) || clean.contains("unauthorized", ignoreCase = true) ->
+                "Google account authorization expired. Please choose the account again."
+            clean.contains("403", ignoreCase = true) || clean.contains("insufficient", ignoreCase = true) ->
+                "Google Drive permission was denied. Please allow Drive backup access."
+            clean.contains("Unable to resolve host", ignoreCase = true) || clean.contains("timeout", ignoreCase = true) ->
+                "Internet connection failed while contacting Google Drive."
+            clean.isNotBlank() -> clean
+            else -> "Google Drive backup failed. Please try again."
         }
     }
 

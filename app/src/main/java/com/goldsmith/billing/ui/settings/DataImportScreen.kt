@@ -34,9 +34,11 @@ import androidx.lifecycle.viewModelScope
 import com.goldsmith.billing.data.dao.BillItemDao
 import com.goldsmith.billing.data.dao.CustomerDao
 import com.goldsmith.billing.data.dao.InvoiceDao
+import com.goldsmith.billing.data.dao.InvoicePaymentDao
 import com.goldsmith.billing.data.model.BillItem
 import com.goldsmith.billing.data.model.Customer
 import com.goldsmith.billing.data.model.Invoice
+import com.goldsmith.billing.data.model.InvoicePayment
 import com.goldsmith.billing.data.model.PaymentStatus
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.security.KeystoreManager
@@ -71,6 +73,7 @@ class DataImportViewModel @Inject constructor(
     private val customerDao: CustomerDao,
     private val invoiceDao: InvoiceDao,
     private val billItemDao: BillItemDao,
+    private val invoicePaymentDao: InvoicePaymentDao,
     private val settingsRepo: SettingsRepository,
     private val keystoreManager: KeystoreManager
 ) : ViewModel() {
@@ -199,7 +202,7 @@ class DataImportViewModel @Inject constructor(
             val totalFine = GoldCalc.roundGrams(billDrafts.sumOf { it.gramsWithMaking })
             val cashPaid = first.pick("cash_paid", "cashpaid", "paid", "payment").toDoubleOrNull() ?: 0.0
             val total = GoldCalc.roundMoney(subtotal + (subtotal * gst / 100.0))
-            val remaining = GoldCalc.roundMoney(total - cashPaid)
+            val remaining = GoldCalc.remainingAfterSettlement(total, cashPaid, 0.0)
             val invoiceNo = first.pick("invoice_no", "invoice", "bill_no", "billno").ifBlank { settingsRepo.nextInvoiceNumber(settings.userPrefix) }
             val invoiceId = invoiceDao.insertInvoice(
                 Invoice(
@@ -225,10 +228,32 @@ class DataImportViewModel @Inject constructor(
                 )
             )
             billItemDao.insertBillItems(billDrafts.map { it.copy(invoiceId = invoiceId) })
+            if (cashPaid > 0.0) {
+                invoicePaymentDao.insertPayment(
+                    InvoicePayment(
+                        invoiceId = invoiceId,
+                        amount = cashPaid,
+                        paymentMode = "CASH",
+                        notes = "Imported billing payment"
+                    )
+                )
+            }
+            recalculateCustomerCashBalance(customer.id, rate)
             imported++
             skipped += itemPreview.skipped
         }
         return DataImportState(message = "Billing import completed", imported = imported, skipped = skipped)
+    }
+
+    private suspend fun recalculateCustomerCashBalance(customerId: Long, currentRate24K: Double) {
+        val customer = customerDao.getCustomerById(customerId) ?: return
+        val cashBalance = invoiceDao.getInvoicesByCustomerSync(customerId)
+            .filter { it.paymentStatus != PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+            .sumOf { invoice ->
+                val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
+                GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
+            }
+        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), updatedAt = Date()))
     }
 
     private fun templateBytes(mode: ImportMode): ByteArray =

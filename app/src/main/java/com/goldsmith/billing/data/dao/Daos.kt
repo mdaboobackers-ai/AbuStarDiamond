@@ -54,6 +54,9 @@ interface InvoiceDao {
     @Query("SELECT * FROM invoices WHERE customerId = :customerId ORDER BY date DESC")
     fun getInvoicesByCustomer(customerId: Long): Flow<List<Invoice>>
 
+    @Query("SELECT * FROM invoices WHERE customerId = :customerId ORDER BY date DESC")
+    suspend fun getInvoicesByCustomerSync(customerId: Long): List<Invoice>
+
     @Query("SELECT * FROM invoices WHERE id = :id")
     suspend fun getInvoiceById(id: Long): Invoice?
 

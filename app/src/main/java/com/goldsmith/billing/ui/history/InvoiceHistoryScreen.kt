@@ -171,8 +171,7 @@ class HistoryViewModel @Inject constructor(
             goldGrams = gold,
             goldKarat = karat
         )
-        val currentCashDue = GoldCalc.pendingCashAtRate(newRemaining, invoiceRate, currentRate)
-        
+
         val updatedInvoice = invoice.copy(
             remainingBalance = newRemaining,
             cashPaid = invoice.cashPaid + amount,
@@ -183,11 +182,11 @@ class HistoryViewModel @Inject constructor(
 
         customerDao.getCustomerById(invoice.customerId)?.let { customer ->
             customerDao.updateCustomer(customer.copy(
-                cashBalance = currentCashDue,
                 goldBalanceGrams = customer.goldBalanceGrams - GoldCalc.pureGoldFromKarat(gold, karat),
                 updatedAt = Date()
             ))
         }
+        recalculateCustomerCashBalance(invoice.customerId, currentRate)
         if (mode == "GOLD" && gold > 0.0) {
             val expectedPurity = (karat / 24.0) * 100.0
             val expectedPure = GoldCalc.pureGoldFromKarat(gold, karat)
@@ -235,8 +234,6 @@ class HistoryViewModel @Inject constructor(
             goldGrams = updatedPayment.goldGrams,
             goldKarat = updatedPayment.goldKarat
         )
-        val currentCashDue = GoldCalc.pendingCashAtRate(newRemaining, invoiceRate, currentRate)
-
         invoiceDao.updateInvoice(invoice.copy(
             remainingBalance = newRemaining,
             cashPaid = invoice.cashPaid - payment.amount + updatedPayment.amount,
@@ -249,11 +246,11 @@ class HistoryViewModel @Inject constructor(
             val oldPure = GoldCalc.pureGoldFromKarat(payment.goldGrams, payment.goldKarat)
             val newPure = GoldCalc.pureGoldFromKarat(updatedPayment.goldGrams, updatedPayment.goldKarat)
             customerDao.updateCustomer(customer.copy(
-                cashBalance = currentCashDue,
                 goldBalanceGrams = customer.goldBalanceGrams + oldPure - newPure,
                 updatedAt = Date()
             ))
         }
+        recalculateCustomerCashBalance(invoice.customerId, currentRate)
 
         val linkedMeltingRecords = meltingDao.getMeltingRecordsByPayment(payment.id)
         if (mode == "GOLD" && updatedPayment.goldGrams > 0.0) {
@@ -302,7 +299,6 @@ class HistoryViewModel @Inject constructor(
             goldGrams = payment.goldGrams,
             goldKarat = payment.goldKarat
         )
-        val currentCashDue = GoldCalc.pendingCashAtRate(newRemaining, invoiceRate, currentRate)
         invoiceDao.updateInvoice(invoice.copy(
             remainingBalance = newRemaining,
             cashPaid = (invoice.cashPaid - payment.amount).coerceAtLeast(0.0),
@@ -312,14 +308,25 @@ class HistoryViewModel @Inject constructor(
         ))
         customerDao.getCustomerById(invoice.customerId)?.let { customer ->
             customerDao.updateCustomer(customer.copy(
-                cashBalance = currentCashDue,
                 goldBalanceGrams = customer.goldBalanceGrams + GoldCalc.pureGoldFromKarat(payment.goldGrams, payment.goldKarat),
                 updatedAt = Date()
             ))
         }
+        recalculateCustomerCashBalance(invoice.customerId, currentRate)
         if (payment.paymentMode == "GOLD") {
             meltingDao.deleteMeltingRecordsByPayment(payment.id)
         }
+    }
+
+    private suspend fun recalculateCustomerCashBalance(customerId: Long, currentRate24K: Double) {
+        val customer = customerDao.getCustomerById(customerId) ?: return
+        val cashBalance = invoiceDao.getInvoicesByCustomerSync(customerId)
+            .filter { it.paymentStatus != PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+            .sumOf { invoice ->
+                val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
+                GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
+            }
+        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), updatedAt = Date()))
     }
 }
 
@@ -664,8 +671,8 @@ fun InvoiceDetailScreen(
     ) { padding ->
         invoice?.let { inv ->
             val invoiceRate = inv.goldRate24K.takeIf { it > 0.0 } ?: settings.goldRate24K
-            val balanceGold = GoldCalc.pendingPureGold(inv.remainingBalance, invoiceRate).coerceAtLeast(0.0)
-            val balanceTodayCash = GoldCalc.pendingCashAtRate(inv.remainingBalance, invoiceRate, settings.goldRate24K)
+            val balanceGold = GoldCalc.balancePureGold(inv.remainingBalance, invoiceRate)
+            val balanceTodayCash = GoldCalc.balanceCashAtRate(inv.remainingBalance, invoiceRate, settings.goldRate24K)
             LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     printMessage?.let {
@@ -801,13 +808,14 @@ fun InvoiceDetailScreen(
                         val expectedPurity = record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent
                         val difference = expectedPure - record.finalPureWeightGrams
                         GlassCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("Purity check ${record.status.lowercase(Locale.getDefault())}", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    InvoiceMetric("Raw received", "${String.format("%.3f", record.rawWeightGrams)}g")
-                                    InvoiceMetric("Expected", "${String.format("%.2f", expectedPurity)}% / ${String.format("%.3f", expectedPure)}g")
-                                    InvoiceMetric("Updated", "${String.format("%.2f", record.purityPercent)}% / ${String.format("%.3f", record.finalPureWeightGrams)}g")
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Purity check", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                                    StatusBadge(record.status)
                                 }
+                                PaymentRow("Raw received", "${String.format("%.3f", record.rawWeightGrams)}g")
+                                PaymentRow("Expected", "${String.format("%.2f", expectedPurity)}% / ${String.format("%.3f", expectedPure)}g")
+                                PaymentRow("Tested", "${String.format("%.2f", record.purityPercent)}% / ${String.format("%.3f", record.finalPureWeightGrams)}g")
                                 if (difference > 0.0) {
                                     Text(
                                         "Shortage adjusted: ${String.format("%.3f", difference)}g pure gold",
@@ -836,8 +844,8 @@ fun InvoiceDetailScreen(
                             Divider(color = AuraColors.GlassWhite10)
                             PaymentRow("Total", "₹${String.format("%,.2f", inv.totalAmount)}", bold = true, color = AuraColors.OnSurface)
                             Divider(color = AuraColors.GlassWhite5)
-                            PaymentRow("Balance Due Today", "₹${String.format("%,.2f", balanceTodayCash)}", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
-                            PaymentRow("Balance Gold", "${String.format("%.3f", balanceGold)}g pure", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
+                            PaymentRow(if (inv.remainingBalance >= 0.0) "Balance Due Today" else "Credit Today", "₹${String.format("%,.2f", kotlin.math.abs(balanceTodayCash))}", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
+                            PaymentRow(if (inv.remainingBalance >= 0.0) "Balance Gold" else "Credit Gold", "${String.format("%.3f", kotlin.math.abs(balanceGold))}g pure", bold = true, color = if (inv.remainingBalance > 0) AuraColors.Error else AuraColors.Primary)
                             PaymentRow("Invoice Rate Balance", "₹${String.format("%,.2f", inv.remainingBalance)}", color = AuraColors.OnSurfaceVariant)
                         }
                     }
@@ -947,10 +955,13 @@ fun AddPaymentDialog(invoice: Invoice, existing: InvoicePayment? = null, current
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: currentRate24K
-                val balanceGold = GoldCalc.pendingPureGold(invoice.remainingBalance, invoiceRate).coerceAtLeast(0.0)
-                val balanceCashToday = GoldCalc.pendingCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
+                val balanceGold = GoldCalc.balancePureGold(invoice.remainingBalance, invoiceRate)
+                val balanceCashToday = GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, currentRate24K)
                 Text(
-                    "Pending: ${String.format("%.3f", balanceGold)}g pure = ₹${String.format("%,.2f", balanceCashToday)} at today's rate",
+                    if (invoice.remainingBalance >= 0.0)
+                        "Pending: ${String.format("%.3f", balanceGold)}g pure = ₹${String.format("%,.2f", balanceCashToday)} at today's rate"
+                    else
+                        "Credit: ${String.format("%.3f", kotlin.math.abs(balanceGold))}g pure = ₹${String.format("%,.2f", kotlin.math.abs(balanceCashToday))} at today's rate",
                     color = AuraColors.PrimaryContainer,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold

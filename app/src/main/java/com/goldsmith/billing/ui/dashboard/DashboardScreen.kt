@@ -1,6 +1,10 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
 package com.goldsmith.billing.ui.dashboard
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -19,6 +23,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
@@ -33,6 +38,7 @@ import com.goldsmith.billing.data.repository.AppSettings
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.CelebrationWishUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -155,6 +161,7 @@ fun DashboardScreen(
     onHallmarkScan: () -> Unit,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
+    val context = LocalContext.current
     val state by viewModel.uiState.collectAsState()
 
     LaunchedEffect(state.settings.goldRate24K) {
@@ -265,7 +272,17 @@ fun DashboardScreen(
                                         Text(event.customer.name, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.Bold)
                                         Text(event.type, style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant)
                                         Spacer(Modifier.height(12.dp))
-                                        GoldButton("Send Wish", onClick = { /* Share wish */ }, modifier = Modifier.height(32.dp))
+                                        GoldButton(
+                                            "Send Wish",
+                                            onClick = {
+                                                sendCelebrationWish(
+                                                    context = context,
+                                                    event = event,
+                                                    senderName = state.companyProfile?.companyName
+                                                )
+                                            },
+                                            modifier = Modifier.height(32.dp)
+                                        )
                                     }
                                 }
                             }
@@ -359,6 +376,47 @@ fun DashboardScreen(
         }
     }
 
+}
+
+private fun sendCelebrationWish(
+    context: Context,
+    event: CustomerEvent,
+    senderName: String?
+) {
+    val message = CelebrationWishUtil.buildWishMessage(
+        customerName = event.customer.name,
+        eventType = event.type,
+        senderName = senderName
+    )
+    val phone = CelebrationWishUtil.whatsappPhoneNumber(event.customer.phone)
+
+    if (phone != null && launchWhatsAppWish(context, phone, message, "com.whatsapp")) return
+    if (phone != null && launchWhatsAppWish(context, phone, message, "com.whatsapp.w4b")) return
+
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, message)
+    }
+    runCatching {
+        context.startActivity(Intent.createChooser(shareIntent, "Send Wish"))
+    }.onFailure {
+        Toast.makeText(context, "No app available to send wish", Toast.LENGTH_SHORT).show()
+    }
+}
+
+private fun launchWhatsAppWish(
+    context: Context,
+    phone: String,
+    message: String,
+    packageName: String
+): Boolean {
+    val uri = Uri.parse("https://wa.me/$phone?text=${Uri.encode(message)}")
+    val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+        setPackage(packageName)
+    }
+    return runCatching {
+        context.startActivity(intent)
+    }.isSuccess
 }
 
 @Composable

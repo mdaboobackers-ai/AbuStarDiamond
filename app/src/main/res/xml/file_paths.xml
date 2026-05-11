@@ -3,5 +3,6 @@
     <cache-path name="shared_images" path="images/" />
     <cache-path name="backups" path="backups/" />
     <files-path name="pdfs" path="pdfs/" />
+    <files-path name="melting_attachments" path="melting_attachments/" />
     <external-cache-path name="external_cache" path="." />
 </paths>

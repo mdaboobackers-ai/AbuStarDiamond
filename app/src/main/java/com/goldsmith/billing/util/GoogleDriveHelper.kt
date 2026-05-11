@@ -3,6 +3,7 @@ package com.goldsmith.billing.util
 import android.content.Context
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.common.api.Scope
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.FileContent
 import com.google.api.client.http.javanet.NetHttpTransport
@@ -34,6 +35,8 @@ object DriveBackupConfig {
         normalizeEmail(activeEmail).ifBlank { normalizeEmail(savedEmail) }
 }
 
+class DriveBackupException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
 class GoogleDriveHelper(
     private val context: Context,
     private val signedInAccount: GoogleSignInAccount? = null
@@ -42,11 +45,18 @@ class GoogleDriveHelper(
     fun currentAccountEmail(): String =
         (signedInAccount ?: GoogleSignIn.getLastSignedInAccount(context))?.email.orEmpty()
 
-    private fun driveService(): Drive? {
-        val account = signedInAccount ?: GoogleSignIn.getLastSignedInAccount(context) ?: return null
-        if (account.account == null) return null
+    private fun driveService(): Drive {
+        val account = signedInAccount ?: GoogleSignIn.getLastSignedInAccount(context)
+            ?: throw DriveBackupException("Select a Google account to continue backup.")
+        val email = DriveBackupConfig.normalizeEmail(account.email)
+        if (email.isBlank()) {
+            throw DriveBackupException("Selected Google account has no email. Please choose the account again.")
+        }
+        if (!GoogleSignIn.hasPermissions(account, Scope(DriveBackupConfig.SCOPE))) {
+            throw DriveBackupException("Google Drive permission is missing. Please choose the account again and allow Drive backup access.")
+        }
         val credential = GoogleAccountCredential.usingOAuth2(context, Collections.singleton(DriveBackupConfig.SCOPE))
-        credential.selectedAccount = account.account
+        credential.selectedAccountName = email
         
         return Drive.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
             .setApplicationName("Abu Star Diamonds")
@@ -54,7 +64,7 @@ class GoogleDriveHelper(
     }
 
     suspend fun uploadFile(localFile: java.io.File, remoteName: String): String? = withContext(Dispatchers.IO) {
-        val service = driveService() ?: return@withContext null
+        val service = driveService()
         
         val existingFile = findFile(remoteName)
         
@@ -66,14 +76,20 @@ class GoogleDriveHelper(
         val content = FileContent("application/octet-stream", localFile)
         
         return@withContext if (existingFile != null) {
-            service.files().update(existingFile.id, null, content).execute().id
+            service.files().update(existingFile.id, File().setName(remoteName), content)
+                .setFields("id, modifiedTime")
+                .execute()
+                .id
         } else {
-            service.files().create(metadata, content).execute().id
+            service.files().create(metadata, content)
+                .setFields("id, modifiedTime")
+                .execute()
+                .id
         }
     }
 
     suspend fun downloadFile(remoteName: String, targetFile: java.io.File): Boolean = withContext(Dispatchers.IO) {
-        val service = driveService() ?: return@withContext false
+        val service = driveService()
         val file = findFile(remoteName) ?: return@withContext false
         
         FileOutputStream(targetFile).use { outputStream ->
@@ -83,7 +99,7 @@ class GoogleDriveHelper(
     }
 
     private fun findFile(name: String): File? {
-        val service = driveService() ?: return null
+        val service = driveService()
         val escapedName = name.replace("'", "\\'")
         val result = service.files().list()
             .setQ("name = '$escapedName' and '${DriveBackupConfig.PARENT}' in parents and trashed = false")

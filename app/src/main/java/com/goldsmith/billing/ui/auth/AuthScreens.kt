@@ -73,6 +73,10 @@ class AuthViewModel @Inject constructor(
     fun savePin(pin: String) = keystoreManager.savePin(pin)
     fun verifyPin(pin: String) = keystoreManager.verifyPin(pin)
     fun setBiometricEnabled(enabled: Boolean) = keystoreManager.setBiometricEnabled(enabled)
+    fun resetPin() {
+        keystoreManager.resetPin()
+        keystoreManager.setBiometricEnabled(false)
+    }
     fun setPrefix(prefix: String) = viewModelScope.launch { settingsRepo.updateUserPrefix(prefix) }
 }
 
@@ -188,6 +192,7 @@ fun PinVerifyScreen(
     var shakeAnim by remember { mutableStateOf(false) }
     var biometricPromptShown by remember { mutableStateOf(false) }
     var biometricFailCount by remember { mutableIntStateOf(0) }
+    var showForgotPinDialog by remember { mutableStateOf(false) }
 
     fun markBiometricFailed(message: String = "Mobile security failed. Try again.") {
         biometricFailCount += 1
@@ -255,6 +260,8 @@ fun PinVerifyScreen(
         showPinEntry = allowPinEntry,
         onDigit = ::onDigit,
         onBack = ::onBack,
+        showForgotPin = true,
+        onForgotPin = { showForgotPinDialog = true },
         onBiometric = {
             showBiometric(
                 context = context,
@@ -265,6 +272,32 @@ fun PinVerifyScreen(
             )
         }
     )
+
+    if (showForgotPinDialog) {
+        AlertDialog(
+            onDismissRequest = { showForgotPinDialog = false },
+            containerColor = AuraColors.SurfaceContainerHigh,
+            title = { Text("Reset app PIN?", color = AuraColors.OnSurface) },
+            text = {
+                Text(
+                    "This removes the current app PIN and disables biometric login. Your billing data stays safe. You will create a new PIN next.",
+                    color = AuraColors.OnSurfaceVariant
+                )
+            },
+            confirmButton = {
+                GoldButton("Reset PIN", onClick = {
+                    viewModel.resetPin()
+                    showForgotPinDialog = false
+                    onFirstTime()
+                })
+            },
+            dismissButton = {
+                TextButton(onClick = { showForgotPinDialog = false }) {
+                    Text("Cancel", color = AuraColors.OnSurfaceVariant)
+                }
+            }
+        )
+    }
 }
 
 // ─── Shared PIN Scaffold ──────────────────────────────────────────────────────
@@ -276,8 +309,10 @@ private fun PinScaffold(
     errorMsg: String,
     showBiometric: Boolean,
     showPinEntry: Boolean = true,
+    showForgotPin: Boolean = false,
     onDigit: (String) -> Unit,
     onBack: () -> Unit,
+    onForgotPin: () -> Unit = {},
     onBiometric: () -> Unit
 ) {
     val infinite = rememberInfiniteTransition(label = "login_security_anim")
@@ -310,7 +345,10 @@ private fun PinScaffold(
         )
 
         Column(
-            Modifier.fillMaxSize().padding(24.dp),
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp, vertical = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -318,9 +356,9 @@ private fun PinScaffold(
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.padding(bottom = 24.dp)
+                modifier = Modifier.padding(bottom = if (showPinEntry) 10.dp else 24.dp)
             ) {
-                Box(Modifier.size(132.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(if (showPinEntry) 76.dp else 132.dp), contentAlignment = Alignment.Center) {
                     Image(
                         painter = painterResource(R.drawable.abu_star_logo),
                         contentDescription = null,
@@ -335,11 +373,11 @@ private fun PinScaffold(
                 Modifier
                     .background(AuraColors.GlassWhite12, RoundedCornerShape(32.dp))
                     .border(1.dp, AuraColors.GlassBorder, RoundedCornerShape(32.dp))
-                    .padding(horizontal = 26.dp, vertical = 28.dp)
+                    .padding(horizontal = 22.dp, vertical = if (showPinEntry) 20.dp else 28.dp)
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(if (showPinEntry) 26.dp else 22.dp)
+                    verticalArrangement = Arrangement.spacedBy(if (showPinEntry) 16.dp else 22.dp)
                 ) {
                     // Title
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -349,7 +387,7 @@ private fun PinScaffold(
                     }
 
                     if (showPinEntry && !showBiometric) {
-                        SecurityAnimation(ringRotation = ringRotation, pulse = pulse, size = 120.dp, iconSize = 42.dp)
+                        SecurityAnimation(ringRotation = ringRotation, pulse = pulse, size = 88.dp, iconSize = 32.dp)
                     }
 
                     if (showPinEntry) {
@@ -372,28 +410,28 @@ private fun PinScaffold(
                     }
 
                     if (showPinEntry) {
-                        Column(verticalArrangement = Arrangement.spacedBy(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             listOf(
                                 listOf("1","2","3"),
                                 listOf("4","5","6"),
                                 listOf("7","8","9")
                             ).forEach { row ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                                     row.forEach { digit ->
-                                        KeypadButton(digit, onClick = { onDigit(digit) })
+                                        KeypadButton(digit, onClick = { onDigit(digit) }, size = 58.dp)
                                     }
                                 }
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                                 if (showBiometric) {
-                                    KeypadButton("", onClick = onBiometric) {
+                                    KeypadButton("", onClick = onBiometric, size = 58.dp) {
                                         Icon(Icons.Default.Security, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(26.dp))
                                     }
                                 } else {
-                                    Spacer(Modifier.size(68.dp))
+                                    Spacer(Modifier.size(58.dp))
                                 }
-                                KeypadButton("0", onClick = { onDigit("0") })
-                                KeypadButton("", onClick = onBack) {
+                                KeypadButton("0", onClick = { onDigit("0") }, size = 58.dp)
+                                KeypadButton("", onClick = onBack, size = 58.dp) {
                                     Icon(Icons.Default.Backspace, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(24.dp))
                                 }
                             }
@@ -415,8 +453,10 @@ private fun PinScaffold(
 
                     // Footer
                     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = {}) {
-                            Text("Forgot PIN?", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, letterSpacing = 2.sp)
+                        if (showForgotPin) {
+                            TextButton(onClick = onForgotPin) {
+                                Text("Forgot PIN?", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, letterSpacing = 2.sp)
+                            }
                         }
                         Divider(color = AuraColors.GlassWhite10, modifier = Modifier.width(32.dp))
                         Text("ENCRYPTED SESSION", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.4f), letterSpacing = 2.sp)
@@ -425,7 +465,7 @@ private fun PinScaffold(
             }
 
             // Bottom security label
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(if (showPinEntry) 14.dp else 32.dp))
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)

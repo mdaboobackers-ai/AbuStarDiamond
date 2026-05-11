@@ -337,6 +337,7 @@ fun KeypadButton(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    size: Dp = 68.dp,
     content: @Composable (() -> Unit)? = null
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -347,7 +348,7 @@ fun KeypadButton(
     )
     Box(
         modifier = modifier
-            .size(68.dp)
+            .size(size)
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(CircleShape)
             .background(AuraColors.GlassWhite5)
@@ -379,6 +380,7 @@ fun BalanceChip(goldGrams: Double, cashBalance: Double) {
         goldGrams > 0 -> AuraColors.Error to "Owes ${String.format("%.2f", goldGrams)}g"
         goldGrams < 0 -> AuraColors.Primary to "We owe ${String.format("%.2f", -goldGrams)}g"
         cashBalance != 0.0 && cashBalance > 0 -> AuraColors.Error to "₹${String.format("%,.0f", cashBalance)} due"
+        cashBalance < 0 -> AuraColors.Primary to "₹${String.format("%,.0f", -cashBalance)} credit"
         else -> AuraColors.OnSurfaceVariant to "Balanced"
     }
     Box(

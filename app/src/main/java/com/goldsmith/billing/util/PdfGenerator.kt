@@ -211,6 +211,14 @@ object PdfGenerator {
         y += 14f
         drawSummaryRow("GST (${invoice.gstPercent}%)", "₹${String.format("%,.2f", invoice.gstAmount)}")
         y += 14f
+        if (kotlin.math.abs(invoice.previousBalanceAdjusted) > 0.005) {
+            drawSummaryRow(
+                if (invoice.previousBalanceAdjusted >= 0.0) "Previous Balance" else "Previous Credit",
+                "₹${String.format("%,.2f", kotlin.math.abs(invoice.previousBalanceAdjusted))}",
+                color = if (invoice.previousBalanceAdjusted >= 0.0) Color.parseColor("#C62828") else Color.parseColor("#2E7D32")
+            )
+            y += 14f
+        }
         drawDivider(canvas, y, LIGHT_GRAY)
         y += 8f
         drawSummaryRow("TOTAL", "₹${String.format("%,.2f", invoice.totalAmount)}", bold = true, color = DARK)
@@ -243,14 +251,14 @@ object PdfGenerator {
         y += 10f
         drawSummaryRow(
             "BALANCE",
-            "₹${String.format("%,.2f", GoldCalc.pendingCashAtRate(invoice.remainingBalance, invoice.goldRate24K.coerceAtLeast(1.0), currentRate24K.coerceAtLeast(1.0)))}",
+            "₹${String.format("%,.2f", kotlin.math.abs(GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoice.goldRate24K.coerceAtLeast(1.0), currentRate24K.coerceAtLeast(1.0))))}",
             bold = true,
             color = if (invoice.remainingBalance > 0) Color.parseColor("#C62828") else Color.parseColor("#2E7D32")
         )
         y += 14f
         drawSummaryRow(
-            "BALANCE GOLD",
-            "${String.format("%.3f", GoldCalc.pendingPureGold(invoice.remainingBalance, invoice.goldRate24K.coerceAtLeast(1.0)).coerceAtLeast(0.0))}g pure",
+            if (invoice.remainingBalance >= 0.0) "BALANCE GOLD" else "CREDIT GOLD",
+            "${String.format("%.3f", kotlin.math.abs(GoldCalc.balancePureGold(invoice.remainingBalance, invoice.goldRate24K.coerceAtLeast(1.0))))}g pure",
             bold = true,
             color = if (invoice.remainingBalance > 0) Color.parseColor("#C62828") else Color.parseColor("#2E7D32")
         )

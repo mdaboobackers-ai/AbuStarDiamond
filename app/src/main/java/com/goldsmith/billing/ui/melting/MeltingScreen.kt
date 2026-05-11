@@ -1,5 +1,7 @@
 package com.goldsmith.billing.ui.melting
 
+import android.content.Context
+import android.graphics.Bitmap
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,9 +17,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.*
+import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -33,6 +37,8 @@ import com.goldsmith.billing.util.GoldCalc
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 import javax.inject.Inject
@@ -90,7 +96,7 @@ class MeltingViewModel @Inject constructor(
             expectedPureWeightGrams = expectedPure,
             expectedPurityPercent = record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent,
             status = when {
-                record.status == MeltingStatus.PENDING.name -> MeltingStatus.PENDING.name
+                previous == null && record.linkedInvoiceId != null -> MeltingStatus.PENDING.name
                 kotlin.math.abs(record.finalPureWeightGrams - expectedPure) > 0.000001 -> MeltingStatus.ADJUSTED.name
                 else -> MeltingStatus.TESTED.name
             },
@@ -103,7 +109,7 @@ class MeltingViewModel @Inject constructor(
         } else {
             0.0
         }
-        val updatedInvoiceRemaining = linkedInvoice?.let { invoice ->
+        linkedInvoice?.let { invoice ->
             if (previous != null) {
                 val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance + meltingCashDelta)
                 invoiceDao.updateInvoice(invoice.copy(
@@ -111,7 +117,6 @@ class MeltingViewModel @Inject constructor(
                     paymentStatus = if (newRemaining <= 0.0) com.goldsmith.billing.data.model.PaymentStatus.PAID else com.goldsmith.billing.data.model.PaymentStatus.PARTIAL,
                     updatedAt = Date()
                 ))
-                newRemaining
             } else {
                 invoice.remainingBalance
             }
@@ -123,23 +128,39 @@ class MeltingViewModel @Inject constructor(
                 customer.goldBalanceGrams + previous.finalPureWeightGrams - normalizedRecord.finalPureWeightGrams
             }
             customerDao.updateCustomer(customer.copy(
-                cashBalance = updatedInvoiceRemaining ?: customer.cashBalance,
                 goldBalanceGrams = newGoldBalance,
                 updatedAt = Date()
             ))
         }
+        linkedInvoice?.let { recalculateCustomerCashBalance(normalizedRecord.customerId, it.goldRate24K) }
         onDone()
     }
 
-    fun deleteRecord(record: MeltingRecord) = viewModelScope.launch {
+    suspend fun getCustomer(id: Long): Customer? = customerDao.getCustomerById(id)
+
+    fun deleteManualRecord(record: MeltingRecord) = viewModelScope.launch {
+        if (record.linkedInvoiceId != null || record.linkedPaymentId != null) return@launch
         meltingDao.deleteMeltingRecord(record)
         customerDao.getCustomerById(record.customerId)?.let { customer ->
-            val newGoldBalance = customer.goldBalanceGrams + record.finalPureWeightGrams
-            customerDao.updateCustomer(customer.copy(goldBalanceGrams = newGoldBalance, updatedAt = Date()))
+            customerDao.updateCustomer(
+                customer.copy(
+                    goldBalanceGrams = customer.goldBalanceGrams + record.finalPureWeightGrams,
+                    updatedAt = Date()
+                )
+            )
         }
     }
 
-    suspend fun getCustomer(id: Long): Customer? = customerDao.getCustomerById(id)
+    private suspend fun recalculateCustomerCashBalance(customerId: Long, fallbackRate24K: Double) {
+        val customer = customerDao.getCustomerById(customerId) ?: return
+        val cashBalance = invoiceDao.getInvoicesByCustomerSync(customerId)
+            .filter { it.paymentStatus != com.goldsmith.billing.data.model.PaymentStatus.PAID || kotlin.math.abs(it.remainingBalance) > 0.005 }
+            .sumOf { invoice ->
+                val invoiceRate = invoice.goldRate24K.takeIf { it > 0.0 } ?: fallbackRate24K
+                GoldCalc.balanceCashAtRate(invoice.remainingBalance, invoiceRate, fallbackRate24K)
+            }
+        customerDao.updateCustomer(customer.copy(cashBalance = GoldCalc.roundMoney(cashBalance), updatedAt = Date()))
+    }
 }
 
 // ─── Melting Screen ───────────────────────────────────────────────────────────
@@ -229,7 +250,7 @@ fun MeltingScreen(
                 items(filteredRecords, key = { it.record.id }) { uiRecord ->
                     MeltingRecordCard(
                         uiRecord = uiRecord,
-                        onEdit = { editTarget = uiRecord.record },
+                        onReview = { editTarget = uiRecord.record },
                         onDelete = { deleteTarget = uiRecord.record }
                     )
                 }
@@ -243,6 +264,7 @@ fun MeltingScreen(
             viewModel = viewModel,
             onDismiss = { showAddDialog = false },
             onSave = { record ->
+                statusFilter = record.status
                 viewModel.saveRecord(record) { showAddDialog = false }
             }
         )
@@ -259,13 +281,13 @@ fun MeltingScreen(
         )
     }
 
-    deleteTarget?.let { record ->
+    deleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             containerColor = AuraColors.SurfaceContainerHigh,
-            title = { Text("Delete melting record?", color = AuraColors.OnSurface) },
-            text = { Text("This will adjust the customer's gold balance. Are you sure?", color = AuraColors.OnSurfaceVariant) },
-            confirmButton = { GoldButton("Delete", onClick = { viewModel.deleteRecord(record); deleteTarget = null }) },
+            title = { Text("Delete manual melting record?", color = AuraColors.OnSurface) },
+            text = { Text("This record was created directly in Melting. Invoice-generated records can only be removed from Invoice History.", color = AuraColors.OnSurfaceVariant) },
+            confirmButton = { GoldButton("Delete", onClick = { viewModel.deleteManualRecord(target); deleteTarget = null }) },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel", color = AuraColors.OnSurfaceVariant) } }
         )
     }
@@ -294,8 +316,9 @@ private fun RowScope.QueueChip(label: String, count: Int, selected: Boolean, onC
 }
 
 @Composable
-fun MeltingRecordCard(uiRecord: MeltingUiRecord, onEdit: () -> Unit, onDelete: () -> Unit) {
+fun MeltingRecordCard(uiRecord: MeltingUiRecord, onReview: () -> Unit, onDelete: () -> Unit) {
     val record = uiRecord.record
+    val canDelete = record.linkedInvoiceId == null && record.linkedPaymentId == null
     val sdf = remember { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()) }
     val purityGain = if (record.rawWeightGrams > 0)
         (record.finalPureWeightGrams / record.rawWeightGrams * 100)
@@ -312,12 +335,12 @@ fun MeltingRecordCard(uiRecord: MeltingUiRecord, onEdit: () -> Unit, onDelete: (
 
     GlassCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Box(Modifier.size(40.dp).background(AuraColors.PrimaryContainer.copy(alpha = 0.12f), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
                         Icon(Icons.Default.Whatshot, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(20.dp))
                     }
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text(uiRecord.customerName, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
                         Text("Melt #${record.id} • ${sdf.format(record.createdAt)}", style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurface.copy(alpha = 0.4f), fontSize = 10.sp)
                         if (uiRecord.customerPhone.isNotEmpty()) {
@@ -325,30 +348,52 @@ fun MeltingRecordCard(uiRecord: MeltingUiRecord, onEdit: () -> Unit, onDelete: (
                         }
                     }
                 }
-                Row {
-                    IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Edit, null, tint = AuraColors.PrimaryContainer.copy(alpha = 0.8f), modifier = Modifier.size(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (canDelete) {
+                        IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Default.Delete, null, tint = AuraColors.Error, modifier = Modifier.size(18.dp))
+                        }
                     }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Delete, null, tint = AuraColors.Error.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+                    Button(
+                        onClick = onReview,
+                        colors = ButtonDefaults.buttonColors(containerColor = AuraColors.PrimaryContainer, contentColor = AuraColors.OnPrimary),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(if (record.status == MeltingStatus.PENDING.name) Icons.Default.Rule else Icons.Default.Verified, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (record.status == MeltingStatus.PENDING.name) "Review" else "Approved", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp)
                     }
                 }
             }
 
             Spacer(Modifier.height(12.dp)); Divider(color = AuraColors.GlassWhite5); Spacer(Modifier.height(12.dp))
 
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                MeltMetric("Raw Weight", "${String.format("%.3f", record.rawWeightGrams)}g")
-                MeltMetric("Expected", "${String.format("%.3f", expectedPure)}g")
-                MeltMetric("Tested", "${String.format("%.3f", record.finalPureWeightGrams)}g")
-                MeltMetric("Status", record.status)
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                MeltMetric("Expected Purity", "${String.format("%.2f", expectedPurity)}%")
-                MeltMetric("Updated Purity", "${String.format("%.2f", record.purityPercent)}%")
-                MeltMetric("Yield", "${String.format("%.1f", purityGain)}%")
-                MeltMetric("Difference", "${String.format("%.3f", pureDifference)}g")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                MeltInfoRow(
+                    leftLabel = "Raw received",
+                    leftValue = "${String.format("%.3f", record.rawWeightGrams)}g",
+                    rightLabel = "Status",
+                    rightValue = record.status.replace("_", " ")
+                )
+                MeltInfoRow(
+                    leftLabel = "Expected purity",
+                    leftValue = "${String.format("%.2f", expectedPurity)}%",
+                    rightLabel = "Expected pure",
+                    rightValue = "${String.format("%.3f", expectedPure)}g"
+                )
+                MeltInfoRow(
+                    leftLabel = "Tested purity",
+                    leftValue = "${String.format("%.2f", record.purityPercent)}%",
+                    rightLabel = "Tested pure",
+                    rightValue = "${String.format("%.3f", record.finalPureWeightGrams)}g"
+                )
+                MeltInfoRow(
+                    leftLabel = "Yield",
+                    leftValue = "${String.format("%.1f", purityGain)}%",
+                    rightLabel = if (pureDifference >= 0.0) "Excess" else "Shortage",
+                    rightValue = "${String.format("%.3f", kotlin.math.abs(pureDifference))}g"
+                )
             }
 
             Spacer(Modifier.height(10.dp))
@@ -372,22 +417,42 @@ fun MeltingRecordCard(uiRecord: MeltingUiRecord, onEdit: () -> Unit, onDelete: (
 }
 
 @Composable
-private fun MeltMetric(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.4f), fontSize = 8.sp, letterSpacing = 0.5.sp)
-        Spacer(Modifier.height(2.dp))
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurface, fontWeight = FontWeight.Medium)
+private fun MeltInfoRow(
+    leftLabel: String,
+    leftValue: String,
+    rightLabel: String,
+    rightValue: String
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        MeltInfoCell(leftLabel, leftValue, Modifier.weight(1f))
+        MeltInfoCell(rightLabel, rightValue, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun MeltInfoCell(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .background(AuraColors.GlassWhite5, RoundedCornerShape(10.dp))
+            .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(10.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp)
+    ) {
+        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.45f), fontSize = 8.sp, letterSpacing = 0.4.sp)
+        Spacer(Modifier.height(3.dp))
+        Text(value, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
 @Composable
 private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord? = null, onDismiss: () -> Unit, onSave: (MeltingRecord) -> Unit) {
+    val context = LocalContext.current
     var rawWeight by remember { mutableStateOf(current?.rawWeightGrams?.toString() ?: "") }
     var finalWeight by remember { mutableStateOf(current?.finalPureWeightGrams?.toString() ?: "") }
     var purity by remember { mutableStateOf(current?.purityPercent?.toString() ?: "91.6") }
     var notes by remember { mutableStateOf(current?.notes ?: "") }
     var customerQuery by remember { mutableStateOf("") }
     var selectedCustomer by remember { mutableStateOf<Customer?>(null) }
+    var lockedCustomer by remember { mutableStateOf<Customer?>(null) }
     var attachedImages by remember { mutableStateOf(current?.imageUris ?: listOf<String>()) }
     val suggestions by viewModel.suggestedCustomers.collectAsState()
     var showSourceChooser by remember { mutableStateOf(false) }
@@ -398,33 +463,66 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord
 
     val cameraLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.TakePicturePreview()
-    ) { bitmap -> /* In production, save bitmap to file and add URI to attachedImages */ }
+    ) { bitmap ->
+        bitmap?.let { captured ->
+            saveMeltingAttachment(context, captured)?.let { uri ->
+                attachedImages = attachedImages + uri
+            }
+        }
+    }
+
+    LaunchedEffect(current?.customerId) {
+        current?.customerId?.let { id ->
+            val customer = viewModel.getCustomer(id)
+            lockedCustomer = customer
+            selectedCustomer = customer
+            customerQuery = customer?.companyName?.ifEmpty { customer.name } ?: "Customer #$id"
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AuraColors.SurfaceContainerHigh,
         title = { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Default.Whatshot, null, tint = AuraColors.PrimaryContainer)
-            Text(if (current == null) "New Melting Record" else "Edit Melting Record", color = AuraColors.OnSurface)
+            Text(if (current == null) "Add Tested Melting" else "Review & Approve Purity", color = AuraColors.OnSurface)
         }},
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.verticalScroll(rememberScrollState())) {
-                OutlinedTextField(
-                    value = customerQuery,
-                    onValueChange = { customerQuery = it; viewModel.setCustomerQuery(it); selectedCustomer = null },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("CUSTOMER", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, letterSpacing = 1.sp) },
-                    placeholder = { Text("Search customer...", color = AuraColors.OnSurface.copy(alpha = 0.3f)) },
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = AuraColors.PrimaryContainer, unfocusedBorderColor = AuraColors.GlassWhite20, focusedTextColor = AuraColors.OnSurface, unfocusedTextColor = AuraColors.OnSurface, focusedContainerColor = AuraColors.GlassWhite5, unfocusedContainerColor = AuraColors.GlassWhite5),
-                    shape = RoundedCornerShape(10.dp), singleLine = true
-                )
+                if (current != null) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(AuraColors.GlassWhite5, RoundedCornerShape(10.dp))
+                            .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(10.dp))
+                            .padding(12.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("CUSTOMER FROM INVOICE", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, fontSize = 9.sp, letterSpacing = 1.sp)
+                            Text(customerQuery, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                            if (lockedCustomer?.phone?.isNotEmpty() == true) {
+                                Text(lockedCustomer!!.phone, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                            }
+                        }
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = customerQuery,
+                        onValueChange = { customerQuery = it; viewModel.setCustomerQuery(it); selectedCustomer = null },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("CUSTOMER", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, letterSpacing = 1.sp) },
+                        placeholder = { Text("Search customer...", color = AuraColors.OnSurface.copy(alpha = 0.3f)) },
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = AuraColors.PrimaryContainer, unfocusedBorderColor = AuraColors.GlassWhite20, focusedTextColor = AuraColors.OnSurface, unfocusedTextColor = AuraColors.OnSurface, focusedContainerColor = AuraColors.GlassWhite5, unfocusedContainerColor = AuraColors.GlassWhite5),
+                        shape = RoundedCornerShape(10.dp), singleLine = true
+                    )
 
-                if (suggestions.isNotEmpty() && selectedCustomer == null) {
-                    Column(Modifier.background(AuraColors.SurfaceContainerHighest, RoundedCornerShape(10.dp)).border(1.dp, AuraColors.GlassBorder, RoundedCornerShape(10.dp))) {
-                        suggestions.take(3).forEach { c ->
-                            Row(Modifier.fillMaxWidth().clickable { selectedCustomer = c; customerQuery = c.name }.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Icon(Icons.Default.Person, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(16.dp))
-                                Text("${c.name} • ${c.phone}", style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurface)
+                    if (suggestions.isNotEmpty() && selectedCustomer == null) {
+                        Column(Modifier.background(AuraColors.SurfaceContainerHighest, RoundedCornerShape(10.dp)).border(1.dp, AuraColors.GlassBorder, RoundedCornerShape(10.dp))) {
+                            suggestions.take(3).forEach { c ->
+                                Row(Modifier.fillMaxWidth().clickable { selectedCustomer = c; customerQuery = c.name }.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Default.Person, null, tint = AuraColors.OnSurfaceVariant, modifier = Modifier.size(16.dp))
+                                    Text("${c.name} • ${c.phone}", style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurface)
+                                }
                             }
                         }
                     }
@@ -483,7 +581,7 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord
                 }
             }
         },
-        confirmButton = { GoldButton("Save Record", onClick = {
+        confirmButton = { GoldButton(if (current == null) "Save Tested" else "Approve Test", onClick = {
             val cust = selectedCustomer
             val customerId = cust?.id ?: current?.customerId
             if (customerId != null && rawWeight.isNotEmpty()) {
@@ -536,4 +634,15 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord
             confirmButton = {}
         )
     }
+}
+
+private fun saveMeltingAttachment(context: Context, bitmap: Bitmap): String? {
+    return runCatching {
+        val dir = File(context.filesDir, "melting_attachments").also { it.mkdirs() }
+        val file = File(dir, "melting_${System.currentTimeMillis()}.jpg")
+        FileOutputStream(file).use { output ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output)
+        }
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file).toString()
+    }.getOrNull()
 }
