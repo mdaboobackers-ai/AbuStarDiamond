@@ -9,6 +9,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.goldsmith.billing.ui.adaptive.AdaptiveScaffold
+import com.goldsmith.billing.ui.adaptive.WindowSize
 import com.goldsmith.billing.ui.auth.PinSetupScreen
 import com.goldsmith.billing.ui.auth.PinVerifyScreen
 import com.goldsmith.billing.ui.auth.PrefixSelectionScreen
@@ -26,8 +28,10 @@ import com.goldsmith.billing.ui.settings.DataImportScreen
 import com.goldsmith.billing.ui.settings.SettingsScreen
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.goldsmith.billing.ui.auth.AuthViewModel
+import com.goldsmith.billing.ui.onboarding.OnboardingRestoreScreen
 
 sealed class Screen(val route: String) {
+    object Onboarding    : Screen("onboarding")
     object PrefixSelect  : Screen("prefix_select")
     object PinSetup      : Screen("pin_setup")
     object PinVerify     : Screen("pin_verify")
@@ -52,15 +56,43 @@ sealed class Screen(val route: String) {
     object HallmarkScan  : Screen("hallmark_scan")
 }
 
+// Screens that should NOT show the bottom/rail navigation bar
+private val noNavRoutes = setOf(
+    Screen.Onboarding.route,
+    Screen.PrefixSelect.route,
+    Screen.PinSetup.route,
+    Screen.PinVerify.route,
+    Screen.NewBill.route.substringBefore("?"),
+    "new_bill"
+)
+
 @Composable
 fun GoldsmithNavGraph(
     navController: NavHostController = rememberNavController(),
     startDestination: String = Screen.PinVerify.route,
+    windowSize: WindowSize = WindowSize.COMPACT,
     authViewModel: AuthViewModel = hiltViewModel()
 ) {
     val settings by authViewModel.settings.collectAsState(com.goldsmith.billing.data.repository.AppSettings())
 
     NavHost(navController = navController, startDestination = startDestination) {
+
+        // ── Auth / Onboarding ─────────────────────────────────────────────
+
+        composable(Screen.Onboarding.route) {
+            OnboardingRestoreScreen(
+                onRestoreDone = {
+                    navController.navigate(Screen.PinSetup.route) {
+                        popUpTo(Screen.Onboarding.route) { inclusive = true }
+                    }
+                },
+                onSkip = {
+                    navController.navigate(Screen.PrefixSelect.route) {
+                        popUpTo(Screen.Onboarding.route) { inclusive = true }
+                    }
+                }
+            )
+        }
 
         composable(Screen.PrefixSelect.route) {
             PrefixSelectionScreen(onPrefixSelected = {
@@ -86,93 +118,101 @@ fun GoldsmithNavGraph(
                     }
                 },
                 onFirstTime = {
-                    val nextRoute = if (settings.userPrefix.isEmpty()) Screen.PrefixSelect.route else Screen.PinSetup.route
-                    navController.navigate(nextRoute) {
+                    // NEW: first install → show onboarding/restore screen first
+                    val next = if (settings.userPrefix.isEmpty()) Screen.Onboarding.route else Screen.PinSetup.route
+                    navController.navigate(next) {
                         popUpTo(Screen.PinVerify.route) { inclusive = true }
                     }
                 }
             )
         }
 
-        composable(Screen.Dashboard.route) {
-            DashboardScreen(
-                onNewBill = { navController.navigate(Screen.NewBill.withCustomer()) },
-                onAddCustomer = { navController.navigate(Screen.Customers.route) },
-                onBackup = { navController.navigate(Screen.Backup.route) },
-                onHistory = { navController.navigate(Screen.InvoiceHistory.route) },
-                onCustomers = { navController.navigate(Screen.Customers.route) },
-                onSettings = { navController.navigate(Screen.Settings.route) },
-                onMelting = { navController.navigate(Screen.Melting.route) },
-                onAnalytics = { navController.navigate(Screen.Analytics.route) },
-                onHallmarkScan = { navController.navigate(Screen.HallmarkScan.route) }
-            )
-        }
+        // ── Main screens (with adaptive nav) ──────────────────────────────
 
-        composable(
-            route = "new_bill?customerId={customerId}",
-            arguments = listOf(navArgument("customerId") {
-                type = NavType.StringType; nullable = true; defaultValue = null
-            })
-        ) { backStackEntry ->
-            val customerId = backStackEntry.arguments?.getString("customerId")?.toLongOrNull()
-            BillingScreen(
-                preselectedCustomerId = customerId,
-                onBack = { navController.popBackStack() },
-                onInvoiceCreated = { invoiceId ->
-                    navController.navigate(Screen.InvoiceDetail.withId(invoiceId)) {
-                        popUpTo(Screen.Dashboard.route)
-                    }
-                }
-            )
+        composable(Screen.Dashboard.route) {
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+                DashboardScreen(
+                    contentPadding = padding,
+                    onNewBill      = { navController.navigate(Screen.NewBill.withCustomer()) },
+                    onAddCustomer  = { navController.navigate(Screen.Customers.route) },
+                    onBackup       = { navController.navigate(Screen.Backup.route) },
+                    onHistory      = { navController.navigate(Screen.InvoiceHistory.route) },
+                    onCustomers    = { navController.navigate(Screen.Customers.route) },
+                    onSettings     = { navController.navigate(Screen.Settings.route) },
+                    onMelting      = { navController.navigate(Screen.Melting.route) },
+                    onAnalytics    = { navController.navigate(Screen.Analytics.route) },
+                    onHallmarkScan = { navController.navigate(Screen.HallmarkScan.route) },
+                    windowSize     = windowSize
+                )
+            }
         }
 
         composable(Screen.Customers.route) {
-            CustomerListScreen(
-                onBack = { navController.popBackStack() },
-                onCustomerDetail = { id -> navController.navigate(Screen.CustomerDetail.withId(id)) },
-                onNewBillForCustomer = { id -> navController.navigate(Screen.NewBill.withCustomer(id)) }
-            )
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+                CustomerListScreen(
+                    contentPadding = padding,
+                    windowSize     = windowSize,
+                    onCustomer     = { id -> navController.navigate(Screen.CustomerDetail.withId(id)) },
+                    onNewBill      = { id -> navController.navigate(Screen.NewBill.withCustomer(id)) },
+                    onBack         = { navController.popBackStack() }
+                )
+            }
         }
 
         composable(
-            route = Screen.CustomerDetail.route,
+            route     = Screen.CustomerDetail.route,
             arguments = listOf(navArgument("customerId") { type = NavType.LongType })
-        ) { backStackEntry ->
-            val customerId = backStackEntry.arguments!!.getLong("customerId")
+        ) { back ->
+            val customerId = back.arguments?.getLong("customerId") ?: return@composable
             CustomerDetailScreen(
                 customerId = customerId,
-                onBack = { navController.popBackStack() },
-                onNewBill = { navController.navigate(Screen.NewBill.withCustomer(customerId)) }
+                windowSize = windowSize,
+                onBack     = { navController.popBackStack() },
+                onNewBill  = { navController.navigate(Screen.NewBill.withCustomer(customerId)) }
             )
         }
 
         composable(Screen.InvoiceHistory.route) {
-            InvoiceHistoryScreen(
-                onBack = { navController.popBackStack() },
-                onInvoiceDetail = { id -> navController.navigate(Screen.InvoiceDetail.withId(id)) },
-                onNewBill = { navController.navigate(Screen.NewBill.withCustomer()) }
-            )
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+                InvoiceHistoryScreen(
+                    contentPadding = padding,
+                    windowSize     = windowSize,
+                    onBack         = { navController.popBackStack() },
+                    onInvoice      = { id -> navController.navigate(Screen.InvoiceDetail.withId(id)) }
+                )
+            }
         }
 
         composable(
-            route = Screen.InvoiceDetail.route,
+            route     = Screen.InvoiceDetail.route,
             arguments = listOf(navArgument("invoiceId") { type = NavType.LongType })
-        ) { backStackEntry ->
-            val invoiceId = backStackEntry.arguments!!.getLong("invoiceId")
+        ) { back ->
+            val invoiceId = back.arguments?.getLong("invoiceId") ?: return@composable
             InvoiceDetailScreen(
-                invoiceId = invoiceId,
-                onBack = { navController.popBackStack() }
+                invoiceId  = invoiceId,
+                windowSize = windowSize,
+                onBack     = { navController.popBackStack() }
             )
         }
 
         composable(Screen.Melting.route) {
-            MeltingScreen(onBack = { navController.popBackStack() })
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+                MeltingScreen(contentPadding = padding, windowSize = windowSize,
+                    onBack = { navController.popBackStack() })
+            }
+        }
+
+        composable(Screen.Backup.route) {
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+                BackupScreen(onBack = { navController.popBackStack() }, windowSize = windowSize)
+            }
         }
 
         composable(Screen.Settings.route) {
             SettingsScreen(
-                onBack = { navController.popBackStack() },
-                onImport = { navController.navigate(Screen.DataImport.route) }
+                onBack       = { navController.popBackStack() },
+                onDataImport = { navController.navigate(Screen.DataImport.route) },
+                windowSize   = windowSize
             )
         }
 
@@ -180,22 +220,31 @@ fun GoldsmithNavGraph(
             DataImportScreen(onBack = { navController.popBackStack() })
         }
 
-        composable(Screen.Backup.route) {
-            BackupScreen(onBack = {
-                if (!navController.popBackStack()) {
-                    navController.navigate(Screen.Dashboard.route) {
-                        popUpTo(Screen.Dashboard.route) { inclusive = true }
-                    }
-                }
-            })
-        }
-
         composable(Screen.Analytics.route) {
-            AnalyticsDashboardScreen(onBack = { navController.popBackStack() })
+            AnalyticsDashboardScreen(onBack = { navController.popBackStack() }, windowSize = windowSize)
         }
 
         composable(Screen.HallmarkScan.route) {
             HallmarkScannerScreen(onBack = { navController.popBackStack() })
+        }
+
+        composable(
+            route     = "new_bill?customerId={customerId}",
+            arguments = listOf(navArgument("customerId") {
+                type = NavType.StringType; nullable = true; defaultValue = null
+            })
+        ) { back ->
+            val customerId = back.arguments?.getString("customerId")?.toLongOrNull()
+            BillingScreen(
+                preselectedCustomerId = customerId,
+                windowSize            = windowSize,
+                onBack                = { navController.popBackStack() },
+                onInvoiceSaved        = { id ->
+                    navController.navigate(Screen.InvoiceDetail.withId(id)) {
+                        popUpTo(Screen.Dashboard.route)
+                    }
+                }
+            )
         }
     }
 }

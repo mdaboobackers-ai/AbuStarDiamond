@@ -20,6 +20,7 @@ import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.navigation.GoldsmithNavGraph
 import com.goldsmith.billing.navigation.Screen
 import com.goldsmith.billing.security.KeystoreManager
+import com.goldsmith.billing.ui.adaptive.rememberWindowSize
 import com.goldsmith.billing.ui.splash.AnimatedSplashScreen
 import com.goldsmith.billing.ui.theme.GoldsmithBillingTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -46,8 +47,7 @@ class MainViewModel @Inject constructor(
     fun resetInactivityTimer() {
         inactivityJob?.cancel()
         val lockSecs = settings.value.inactivityLockSecs.toLong()
-        if (lockSecs <= 0) return 
-
+        if (lockSecs <= 0) return
         inactivityJob = viewModelScope.launch {
             delay(lockSecs * 1000)
             _lockApp.value = true
@@ -63,8 +63,8 @@ class MainActivity : FragmentActivity() {
     private val viewModel: MainViewModel by viewModels()
 
     override fun attachBaseContext(newBase: Context) {
-        val prefs = newBase.getSharedPreferences("goldsmith_settings", Context.MODE_PRIVATE)
-        val lang = prefs.getString("language", "en") ?: "en"
+        val prefs  = newBase.getSharedPreferences("goldsmith_settings", Context.MODE_PRIVATE)
+        val lang   = prefs.getString("language", "en") ?: "en"
         val locale = Locale(lang)
         Locale.setDefault(locale)
         val config = Configuration(newBase.resources.configuration)
@@ -76,32 +76,24 @@ class MainActivity : FragmentActivity() {
         installSplashScreen()
         super.onCreate(savedInstanceState)
 
-        window.setFlags(
-            WindowManager.LayoutParams.FLAG_SECURE,
-            WindowManager.LayoutParams.FLAG_SECURE
-        )
+        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
 
         setContent {
-            val settings by viewModel.settings.collectAsState()
-            val locked by viewModel.lockApp.collectAsState()
+            val settings   by viewModel.settings.collectAsState()
+            val locked     by viewModel.lockApp.collectAsState()
             var showSplash by remember { mutableStateOf(true) }
 
+            // Detect phone vs tablet once at root — passed to every screen
+            val windowSize = rememberWindowSize()
+
             GoldsmithBillingTheme(darkTheme = settings.isDarkTheme) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val navController = rememberNavController()
-                    val startDestination = if (viewModel.isPinSet)
-                        Screen.PinVerify.route
-                    else
-                        Screen.PinSetup.route
+                    val startDest     = if (viewModel.isPinSet) Screen.PinVerify.route else Screen.PinSetup.route
 
                     if (locked) {
                         LaunchedEffect(Unit) {
-                            navController.navigate(Screen.PinVerify.route) {
-                                popUpTo(0) { inclusive = true }
-                            }
+                            navController.navigate(Screen.PinVerify.route) { popUpTo(0) { inclusive = true } }
                             viewModel.unlock()
                         }
                     }
@@ -110,8 +102,9 @@ class MainActivity : FragmentActivity() {
                         AnimatedSplashScreen { showSplash = false }
                     } else {
                         GoldsmithNavGraph(
-                            navController = navController,
-                            startDestination = startDestination
+                            navController    = navController,
+                            startDestination = startDest,
+                            windowSize       = windowSize
                         )
                     }
                 }
@@ -119,16 +112,8 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    override fun onUserInteraction() {
-        super.onUserInteraction()
-        viewModel.resetInactivityTimer()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        viewModel.resetInactivityTimer()
-    }
-
+    override fun onUserInteraction() { super.onUserInteraction(); viewModel.resetInactivityTimer() }
+    override fun onResume()          { super.onResume();          viewModel.resetInactivityTimer() }
     override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
         viewModel.resetInactivityTimer()
         return super.dispatchTouchEvent(ev)
