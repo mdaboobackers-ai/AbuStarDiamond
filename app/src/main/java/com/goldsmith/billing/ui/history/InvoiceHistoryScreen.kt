@@ -701,7 +701,7 @@ fun InvoiceDetailScreen(
                 item {
                     val shopName = inv.customerShopName.ifEmpty { customer?.companyName?.ifEmpty { customer?.name ?: "" } ?: "" }
                     val ownerName = inv.customerOwnerName.ifEmpty { customer?.name ?: "" }
-                    val address = inv.customerAddress.ifEmpty { customer?.address ?: "" }
+                    val address = inv.customerAddress.ifEmpty { customer?.fullAddress() ?: "" }
                     val phone = inv.customerPhone.ifEmpty { customer?.phone ?: "" }
                     GlassCard(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

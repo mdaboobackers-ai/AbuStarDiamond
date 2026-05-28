@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.*
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.util.BackupSchedule
+import com.goldsmith.billing.util.LocalBackupStore
 import com.goldsmith.billing.worker.BirthdayAlertWorker
 import com.goldsmith.billing.worker.DailyBackupWorker
 import dagger.hilt.android.HiltAndroidApp
@@ -46,6 +47,7 @@ class GoldsmithApp : Application(), Configuration.Provider {
 
                 if (settings.autoBackupEnabled) {
                     scheduleDailyBackup()
+                    scheduleMissedBackupIfNeeded()
                 } else {
                     cancelDailyBackup()
                 }
@@ -72,8 +74,23 @@ class GoldsmithApp : Application(), Configuration.Provider {
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "goldsmith_daily_backup",
-            ExistingPeriodicWorkPolicy.UPDATE,
+            ExistingPeriodicWorkPolicy.KEEP,
             backupRequest
+        )
+    }
+
+    private fun scheduleMissedBackupIfNeeded() {
+        if (!BackupSchedule.shouldRunCatchUp(LocalBackupStore.latestBackupFile(this)?.lastModified())) return
+
+        val catchUpRequest = OneTimeWorkRequestBuilder<DailyBackupWorker>()
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
+            .addTag("daily_backup_catchup")
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            "abustar_daily_backup_catchup",
+            ExistingWorkPolicy.KEEP,
+            catchUpRequest
         )
     }
 

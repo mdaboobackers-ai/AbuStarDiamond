@@ -108,6 +108,9 @@ class CustomerViewModel @Inject constructor(
     fun getInvoicesForCustomer(customerId: Long): Flow<List<Invoice>> =
         invoiceDao.getInvoicesByCustomer(customerId)
 
+    fun getCustomer(customerId: Long): Flow<Customer?> =
+        customerDao.observeCustomerById(customerId)
+
     fun getPaymentsForCustomer(customerId: Long): Flow<List<com.goldsmith.billing.data.model.InvoicePayment>> =
         combine(invoiceDao.getInvoicesByCustomer(customerId), invoicePaymentDao.getAllPayments()) { invoices, payments ->
             val invoiceIds = invoices.map { it.id }.toSet()
@@ -270,6 +273,9 @@ fun CustomerCard(customer: Customer, onViewLedger: () -> Unit, onQuickBill: () -
                             Text(customer.phone, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurface.copy(alpha = 0.4f))
                         }
                     }
+                    customer.fullAddress().takeIf { it.isNotBlank() }?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.62f), maxLines = 2)
+                    }
                 }
                 BalanceChip(customer.goldBalanceGrams, customer.cashBalance)
             }
@@ -336,20 +342,19 @@ private fun balanceColor(value: Double): Color =
 
 @Composable
 fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> Unit, viewModel: CustomerViewModel = hiltViewModel()) {
+    val customer by viewModel.getCustomer(customerId).collectAsState(null)
     val invoices by viewModel.getInvoicesForCustomer(customerId).collectAsState(emptyList())
     val payments by viewModel.getPaymentsForCustomer(customerId).collectAsState(emptyList())
     val melting by viewModel.getMeltingForCustomer(customerId).collectAsState(emptyList())
     val settings by viewModel.settings.collectAsState()
-    val customer = remember(invoices, payments, melting) {
-        invoices.firstOrNull()?.let {
-            Customer(
-                id = it.customerId,
-                name = it.customerOwnerName,
-                phone = it.customerPhone,
-                companyName = it.customerShopName,
-                address = it.customerAddress
-            )
-        }
+    val displayCustomer = customer ?: invoices.firstOrNull()?.let {
+        Customer(
+            id = it.customerId,
+            name = it.customerOwnerName,
+            phone = it.customerPhone,
+            companyName = it.customerShopName,
+            address = it.customerAddress
+        )
     }
 
     Scaffold(
@@ -369,7 +374,7 @@ fun CustomerDetailScreen(customerId: Long, onBack: () -> Unit, onNewBill: () -> 
                 val netCashBalance = invoices.sumOf { GoldCalc.balanceCashAtRate(it.remainingBalance, it.goldRate24K.takeIf { rate -> rate > 0.0 } ?: settings.goldRate24K, settings.goldRate24K) }
                 GlassCard(Modifier.fillMaxWidth(), goldBorder = true) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(customer?.companyName?.ifEmpty { customer.name } ?: "Customer Wallet", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                        Text(displayCustomer?.companyName?.ifEmpty { displayCustomer.name } ?: "Customer Wallet", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             WalletMetric(if (netGoldBalance >= 0.0) "Pure Gold Due" else "Pure Gold Credit", "${String.format("%.3f", kotlin.math.abs(netGoldBalance))}g", Modifier.weight(1f))
                             WalletMetric(if (netCashBalance >= 0.0) "Today Rate Due" else "Today Rate Credit", "₹${String.format("%,.0f", kotlin.math.abs(netCashBalance))}", Modifier.weight(1f))
@@ -478,7 +483,11 @@ fun AddCustomerDialog(initial: Customer? = null, onDismiss: () -> Unit, onSave: 
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var phone by remember { mutableStateOf(initial?.phone ?: "") }
     var company by remember { mutableStateOf(initial?.companyName ?: "") }
+    var doorNo by remember { mutableStateOf(initial?.doorNo ?: "") }
     var address by remember { mutableStateOf(initial?.address ?: "") }
+    var city by remember { mutableStateOf(initial?.city ?: "") }
+    var state by remember { mutableStateOf(initial?.state ?: "") }
+    var pincode by remember { mutableStateOf(initial?.pincode ?: "") }
     var gst by remember { mutableStateOf(initial?.gstNumber ?: "") }
     var dob by remember { mutableStateOf(initial?.dob) }
     var anniversary by remember { mutableStateOf(initial?.anniversary) }
@@ -495,7 +504,13 @@ fun AddCustomerDialog(initial: Customer? = null, onDismiss: () -> Unit, onSave: 
                 GhostTextField(name, { name = it }, "Full Name", placeholder = "e.g. Alistair Penhaligon")
                 GhostTextField(phone, { phone = it }, "Phone Number", placeholder = "+91 98765 43210", keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Phone))
                 GhostTextField(company, { company = it }, "Company Name (Optional)")
-                GhostTextField(address, { address = it }, "Address", singleLine = false)
+                GhostTextField(doorNo, { doorNo = it }, "Door No / Building")
+                GhostTextField(address, { address = it }, "Address / Street", singleLine = false)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GhostTextField(city, { city = it }, "City", modifier = Modifier.weight(1f))
+                    GhostTextField(state, { state = it }, "State", modifier = Modifier.weight(1f))
+                }
+                GhostTextField(pincode, { pincode = it }, "Pincode", keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Number))
                 GhostTextField(gst, { gst = it }, "GST Number (Optional)")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     DatePickerField(label = "Date of Birth", selectedDate = dob, onDateSelected = { dob = it }, modifier = Modifier.weight(1f))
@@ -506,8 +521,31 @@ fun AddCustomerDialog(initial: Customer? = null, onDismiss: () -> Unit, onSave: 
         confirmButton = {
             GoldButton(if (initial == null) "Register & Continue" else "Save Changes", onClick = {
                 if (name.isNotEmpty()) {
-                    onSave(initial?.copy(name = name, phone = phone, companyName = company, address = address, gstNumber = gst, dob = dob, anniversary = anniversary)
-                        ?: Customer(name = name, phone = phone, companyName = company, address = address, gstNumber = gst, dob = dob, anniversary = anniversary))
+                    onSave(initial?.copy(
+                        name = name,
+                        phone = phone,
+                        companyName = company,
+                        doorNo = doorNo,
+                        address = address,
+                        city = city,
+                        state = state,
+                        pincode = pincode,
+                        gstNumber = gst,
+                        dob = dob,
+                        anniversary = anniversary
+                    ) ?: Customer(
+                        name = name,
+                        phone = phone,
+                        companyName = company,
+                        doorNo = doorNo,
+                        address = address,
+                        city = city,
+                        state = state,
+                        pincode = pincode,
+                        gstNumber = gst,
+                        dob = dob,
+                        anniversary = anniversary
+                    ))
                 }
             })
         },

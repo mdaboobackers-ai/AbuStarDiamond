@@ -185,7 +185,7 @@ class BillingViewModel @Inject constructor(
             customerId = customer.id,
             customerShopName = customer.companyName.ifEmpty { customer.name },
             customerOwnerName = customer.name,
-            customerAddress = customer.address,
+            customerAddress = customer.fullAddress(),
             customerPhone = customer.phone,
             date = Date(),
             totalWeightGrams = totalWeight(),

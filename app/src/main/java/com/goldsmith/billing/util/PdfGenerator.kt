@@ -122,7 +122,7 @@ object PdfGenerator {
         y += 24f
         val shopName = invoice.customerShopName.ifEmpty { customer.companyName.ifEmpty { customer.name } }
         val ownerName = invoice.customerOwnerName.ifEmpty { customer.name }
-        val address = invoice.customerAddress.ifEmpty { customer.address }
+        val address = invoice.customerAddress.ifEmpty { customer.fullAddress() }
         val phone = invoice.customerPhone.ifEmpty { customer.phone }
         drawTextWithin(canvas, shopName, MARGIN, y, 320f, valuePaint)
         y += 14f

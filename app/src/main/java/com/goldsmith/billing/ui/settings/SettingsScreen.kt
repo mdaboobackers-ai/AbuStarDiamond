@@ -336,6 +336,28 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
+                            profile?.ownerName?.takeIf { it.isNotBlank() }?.let {
+                                Text(
+                                    "Owner: $it",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AuraColors.OnSurfaceVariant
+                                )
+                            }
+                            profile?.profileAddressText()?.takeIf { it.isNotBlank() }?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AuraColors.OnSurfaceVariant,
+                                    maxLines = 2
+                                )
+                            }
+                            profile?.mobileNumber?.takeIf { it.isNotBlank() }?.let {
+                                Text(
+                                    "Phone: $it",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AuraColors.OnSurfaceVariant
+                                )
+                            }
                             Text(
                                 profile?.gstNumber?.ifEmpty { "GST: Not set" }
                                     ?: "GST: Not set",
@@ -948,6 +970,11 @@ private fun CompanyProfileDialog(
         }
     )
 }
+
+private fun CompanyProfile.profileAddressText(): String =
+    listOf(address1, address2, city, state, pincode)
+        .filter { it.isNotBlank() }
+        .joinToString(", ")
 
 @Composable
 private fun ChangePinDialog(onDismiss: () -> Unit, onSave: (String) -> Unit) {

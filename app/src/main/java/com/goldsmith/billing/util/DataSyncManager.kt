@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import com.goldsmith.billing.data.db.GoldsmithDatabase
 import com.goldsmith.billing.data.model.*
+import com.goldsmith.billing.data.repository.AppSettings
+import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.security.KeystoreManager
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.gson.Gson
@@ -25,8 +27,34 @@ data class SyncPayload(
     val meltingRecords: List<MeltingRecord>,
     val goldRates: List<GoldRate>,
     val companyProfile: CompanyProfile?,
+    val appSettings: AppSettings? = null,
     val deviceId: String,
     val timestamp: Long = System.currentTimeMillis()
+)
+
+data class BackupCounts(
+    val customers: Int = 0,
+    val invoices: Int = 0,
+    val billItems: Int = 0,
+    val invoicePayments: Int = 0,
+    val meltingRecords: Int = 0,
+    val goldRates: Int = 0,
+    val hasCompanyProfile: Boolean = false,
+    val hasAppSettings: Boolean = false
+) {
+    fun summary(): String =
+        "Customers $customers • Bills $invoices • Items $billItems • Payments $invoicePayments • Melting $meltingRecords"
+}
+
+fun SyncPayload.counts(): BackupCounts = BackupCounts(
+    customers = customers.size,
+    invoices = invoices.size,
+    billItems = billItems.size,
+    invoicePayments = invoicePayments.orEmpty().size,
+    meltingRecords = meltingRecords.size,
+    goldRates = goldRates.size,
+    hasCompanyProfile = companyProfile != null,
+    hasAppSettings = appSettings != null
 )
 
 object BackupFileConfig {
@@ -75,7 +103,10 @@ class DataSyncManager(
         .create()
     private val driveHelper = GoogleDriveHelper(context, signedInAccount)
     private val keystoreManager = KeystoreManager(context)
+    private val settingsRepo = SettingsRepository(context)
     var lastErrorMessage: String? = null
+        private set
+    var lastBackupCounts: BackupCounts? = null
         private set
 
     suspend fun performSync(): Boolean = withContext(Dispatchers.IO) {
@@ -86,28 +117,16 @@ class DataSyncManager(
                 driveHelper.downloadFile(DriveBackupConfig.LEGACY_REMOTE_FILE, remoteFile)
             
             if (success) {
-                readPayload(remoteFile)?.let { smartMerge(it) }
+                readPayload(remoteFile)?.let {
+                    lastBackupCounts = it.counts()
+                    smartMerge(it)
+                }
             }
             
             // After merge, export current state
-            val allInvoices = db.invoiceDao().getAllInvoices().first()
-            val allCustomers = db.customerDao().getAllCustomers().first()
-            val allMelting = db.meltingDao().getAllMeltingRecords().first()
-            val allRates = db.goldRateDao().getRateHistory().first()
-            val allPayments = db.invoicePaymentDao().getAllPayments().first()
-            
-            val payload = SyncPayload(
-                customers = allCustomers,
-                invoices = allInvoices,
-                billItems = fetchAllBillItems(allInvoices),
-                invoicePayments = allPayments,
-                meltingRecords = allMelting,
-                goldRates = allRates,
-                companyProfile = db.companyProfileDao().getProfileSync(),
-                deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
-            )
-            
             val localFile = File(context.cacheDir, "local_sync.json")
+            val payload = buildPayload(System.currentTimeMillis())
+            lastBackupCounts = payload.counts()
             writeEncryptedPayload(localFile, payload)
             val uploaded = driveHelper.uploadFile(localFile, DriveBackupConfig.REMOTE_FILE) != null
             if (!uploaded) lastErrorMessage = "Google Drive upload did not return a file id."
@@ -123,7 +142,9 @@ class DataSyncManager(
         lastErrorMessage = null
         try {
             val localFile = File(context.cacheDir, "local_sync.json")
-            writeEncryptedPayload(localFile, buildPayload())
+            val payload = buildPayload(System.currentTimeMillis())
+            lastBackupCounts = payload.counts()
+            writeEncryptedPayload(localFile, payload)
             val uploaded = driveHelper.uploadFile(localFile, DriveBackupConfig.REMOTE_FILE) != null
             if (!uploaded) lastErrorMessage = "Google Drive upload did not return a file id."
             uploaded
@@ -149,6 +170,7 @@ class DataSyncManager(
                 lastErrorMessage = "Backup file could not be read or decrypted."
                 return@withContext false
             }
+            lastBackupCounts = remotePayload.counts()
             smartMerge(remotePayload)
             true
         } catch (e: Exception) {
@@ -158,10 +180,12 @@ class DataSyncManager(
         }
     }
 
-    suspend fun exportBackupToUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+    suspend fun exportBackupToUri(uri: Uri, backupTime: Long = System.currentTimeMillis()): Boolean = withContext(Dispatchers.IO) {
         lastErrorMessage = null
         try {
-            val backupBytes = encryptedPayloadBytes(buildPayload())
+            val payload = buildPayload(backupTime)
+            lastBackupCounts = payload.counts()
+            val backupBytes = encryptedPayloadBytes(payload)
             val resolver = context.contentResolver
             val opened = runCatching { resolver.openOutputStream(uri, "wt") }.getOrNull()
                 ?: resolver.openOutputStream(uri)
@@ -196,6 +220,7 @@ class DataSyncManager(
                 lastErrorMessage = "Backup file could not be read. Please select a valid Abu Star backup file."
                 return@withContext false
             }
+            lastBackupCounts = remotePayload.counts()
             smartMerge(remotePayload)
             true
         } catch (e: Exception) {
@@ -229,11 +254,44 @@ class DataSyncManager(
         withContext(Dispatchers.IO) {
             lastErrorMessage = null
             try {
-                val backupFile = LocalBackupStore.backupFile(context, fileName)
-                writeEncryptedPayload(backupFile, buildPayload())
+                createLocalBackupFile(fileName) != null
                 true
             } catch (e: Exception) {
                 lastErrorMessage = fileBackupErrorMessage(e)
+                e.printStackTrace()
+                false
+            }
+        }
+
+    suspend fun createLocalBackupFile(fileName: String = BackupFileConfig.defaultFileName()): File? =
+        withContext(Dispatchers.IO) {
+            lastErrorMessage = null
+            try {
+                val backupFile = LocalBackupStore.backupFile(context, fileName)
+                val payload = buildPayload(System.currentTimeMillis())
+                lastBackupCounts = payload.counts()
+                writeEncryptedPayload(backupFile, payload)
+                backupFile
+            } catch (e: Exception) {
+                lastErrorMessage = fileBackupErrorMessage(e)
+                e.printStackTrace()
+                null
+            }
+        }
+
+    suspend fun uploadLocalBackupToDrive(file: File = LocalBackupStore.latestBackupFile(context) ?: File("")): Boolean =
+        withContext(Dispatchers.IO) {
+            lastErrorMessage = null
+            try {
+                if (!file.exists() || file.length() <= 0L) {
+                    lastErrorMessage = "No local backup file found. Save a local backup first."
+                    return@withContext false
+                }
+                val uploaded = driveHelper.uploadFile(file, DriveBackupConfig.REMOTE_FILE) != null
+                if (!uploaded) lastErrorMessage = "Google Drive upload did not return a file id."
+                uploaded
+            } catch (e: Exception) {
+                lastErrorMessage = backupErrorMessage(e)
                 e.printStackTrace()
                 false
             }
@@ -295,12 +353,15 @@ class DataSyncManager(
         }
     }
 
-    private suspend fun buildPayload(): SyncPayload {
+    private suspend fun buildPayload(backupTimeOverride: Long? = null): SyncPayload {
         val allInvoices = db.invoiceDao().getAllInvoices().first()
         val allCustomers = db.customerDao().getAllCustomers().first()
         val allMelting = db.meltingDao().getAllMeltingRecords().first()
         val allRates = db.goldRateDao().getRateHistory().first()
         val allPayments = db.invoicePaymentDao().getAllPayments().first()
+        val settings = settingsRepo.settingsFlow.first().let { current ->
+            backupTimeOverride?.let { current.copy(lastBackupTime = it) } ?: current
+        }
 
         return SyncPayload(
             customers = allCustomers,
@@ -310,6 +371,7 @@ class DataSyncManager(
             meltingRecords = allMelting,
             goldRates = allRates,
             companyProfile = db.companyProfileDao().getProfileSync(),
+            appSettings = settings,
             deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
         )
     }
@@ -328,15 +390,23 @@ class DataSyncManager(
         val paymentIdMap = mutableMapOf<Long, Long>()
         val invoiceIdsReceivingRemoteRows = mutableSetOf<Long>()
 
-        // 1. Customers merge by phone first. Local Room ids collide across offline devices.
+        val localCustomersByKey = db.customerDao().getAllCustomersSync()
+            .associateBy { BackupMergeIdentity.customerKey(it) }
+            .toMutableMap()
+
+        // 1. Customers merge by stable business identity. Local Room ids collide across reinstalls/offline devices.
         remote.customers.forEach { remoteCust ->
-            val localCust = remoteCust.phone.takeIf { it.isNotBlank() }?.let { db.customerDao().getCustomerByPhone(it) }
-                ?: db.customerDao().getCustomerById(remoteCust.id)
+            val remoteKey = BackupMergeIdentity.customerKey(remoteCust)
+            val localCust = localCustomersByKey[remoteKey]
             val localId = if (localCust == null) {
-                db.customerDao().insertCustomer(remoteCust.copy(id = 0))
+                val inserted = db.customerDao().insertCustomer(remoteCust.copy(id = 0))
+                localCustomersByKey[remoteKey] = remoteCust.copy(id = inserted)
+                inserted
             } else {
                 if (remoteCust.updatedAt.after(localCust.updatedAt)) {
-                    db.customerDao().updateCustomer(remoteCust.copy(id = localCust.id))
+                    val updated = remoteCust.copy(id = localCust.id)
+                    db.customerDao().updateCustomer(updated)
+                    localCustomersByKey[remoteKey] = updated
                 }
                 localCust.id
             }
@@ -345,17 +415,32 @@ class DataSyncManager(
 
         // 2. Invoices merge by invoice number. This preserves independent offline bills.
         remote.invoices.forEach { remoteInv ->
-            val mappedCustomerId = customerIdMap[remoteInv.customerId] ?: remoteInv.customerId
-            val normalizedRemote = remoteInv.copy(customerId = mappedCustomerId)
+            val mappedCustomerId = customerIdMap[remoteInv.customerId] ?: customerIdFromInvoiceSnapshot(remoteInv, localCustomersByKey).also {
+                customerIdMap[remoteInv.customerId] = it
+            }
+            val normalizedRemote = invoiceWithCustomerSnapshot(remoteInv, mappedCustomerId)
             val localInv = db.invoiceDao().getInvoiceByNumber(remoteInv.invoiceNumber)
             val localId = if (localInv == null) {
                 db.invoiceDao().insertInvoice(normalizedRemote.copy(id = 0)).also {
                     invoiceIdsReceivingRemoteRows += it
                 }
             } else {
+                if (db.billItemDao().getBillItemsForInvoiceSync(localInv.id).isEmpty()) {
+                    invoiceIdsReceivingRemoteRows += localInv.id
+                }
                 if (remoteInv.updatedAt.after(localInv.updatedAt)) {
                     db.invoiceDao().updateInvoice(normalizedRemote.copy(id = localInv.id))
                     invoiceIdsReceivingRemoteRows += localInv.id
+                } else if (localInv.customerOwnerName.isBlank() || localInv.customerShopName.isBlank() || localInv.customerPhone.isBlank()) {
+                    db.invoiceDao().updateInvoice(
+                        localInv.copy(
+                            customerId = mappedCustomerId,
+                            customerShopName = normalizedRemote.customerShopName,
+                            customerOwnerName = normalizedRemote.customerOwnerName,
+                            customerAddress = normalizedRemote.customerAddress,
+                            customerPhone = normalizedRemote.customerPhone
+                        )
+                    )
                 }
                 localInv.id
             }
@@ -391,7 +476,6 @@ class DataSyncManager(
                 linkedPaymentId = mappedPaymentId
             )
             val localMelt = localMelting.firstOrNull { it.sameMeltingAs(normalizedRemote) }
-                ?: db.meltingDao().getMeltingRecordById(remoteMelt.id)
             if (localMelt == null) {
                 db.meltingDao().insertMeltingRecord(normalizedRemote.copy(id = 0))
             } else if (remoteMelt.updatedAt.after(localMelt.updatedAt)) {
@@ -400,6 +484,39 @@ class DataSyncManager(
         }
 
         remote.companyProfile?.let { db.companyProfileDao().upsertProfile(it) }
+        remote.appSettings?.let { settingsRepo.restoreFromBackup(it) }
+    }
+
+    private suspend fun customerIdFromInvoiceSnapshot(
+        invoice: Invoice,
+        localCustomersByKey: MutableMap<String, Customer>
+    ): Long {
+        val restored = Customer(
+            name = invoice.customerOwnerName.ifBlank {
+                invoice.customerShopName.ifBlank { "Restored Customer" }
+            },
+            phone = invoice.customerPhone,
+            companyName = invoice.customerShopName,
+            address = invoice.customerAddress,
+            createdAt = invoice.createdAt,
+            updatedAt = invoice.updatedAt
+        )
+        val key = BackupMergeIdentity.customerKey(invoice)
+        localCustomersByKey[key]?.let { return it.id }
+        val inserted = db.customerDao().insertCustomer(restored)
+        localCustomersByKey[key] = restored.copy(id = inserted)
+        return inserted
+    }
+
+    private suspend fun invoiceWithCustomerSnapshot(invoice: Invoice, customerId: Long): Invoice {
+        val customer = db.customerDao().getCustomerById(customerId)
+        return invoice.copy(
+            customerId = customerId,
+            customerShopName = invoice.customerShopName.ifBlank { customer?.companyName.orEmpty() },
+            customerOwnerName = invoice.customerOwnerName.ifBlank { customer?.name.orEmpty() },
+            customerAddress = invoice.customerAddress.ifBlank { customer?.fullAddress().orEmpty() },
+            customerPhone = invoice.customerPhone.ifBlank { customer?.phone.orEmpty() }
+        )
     }
 
     private fun InvoicePayment.samePaymentAs(other: InvoicePayment): Boolean =

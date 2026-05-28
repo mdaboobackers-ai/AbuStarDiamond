@@ -182,6 +182,31 @@ class SettingsRepository @Inject constructor(
         context.dataStore.edit { it[BACKUP_DOCUMENT_URI] = uri }
     }
 
+    suspend fun restoreFromBackup(settings: AppSettings) {
+        context.dataStore.edit { prefs ->
+            prefs[LANGUAGE] = settings.language
+            prefs[THEME] = if (settings.isDarkTheme) "dark" else "light"
+            prefs[USER_PREFIX] = settings.userPrefix
+            prefs[GOLD_RATE_24K] = settings.goldRate24K
+            prefs[GOLD_RATE_22K] = settings.goldRate22K
+            prefs[GOLD_RATE_20K] = settings.goldRate20K
+            prefs[GOLD_RATE_18K] = settings.goldRate18K
+            prefs[LAST_BACKUP_TIME] = settings.lastBackupTime
+            prefs[AUTO_BACKUP_ENABLED] = settings.autoBackupEnabled
+            prefs[INVOICE_COUNTER] = settings.invoiceCounter
+            prefs[GST_PERCENT] = settings.gstPercent
+            prefs[INACTIVITY_LOCK_SECS] = settings.inactivityLockSecs
+            prefs[SELECTED_ICON] = settings.selectedIcon
+            prefs[CUSTOM_ICON_URI] = settings.customIconUri
+            prefs[SELECTED_BACKUP_EMAIL] = settings.selectedBackupEmail
+            prefs[LAST_BACKUP_ACCOUNT_EMAIL] = settings.lastBackupAccountEmail
+            prefs[LAST_RESTORE_ACCOUNT_EMAIL] = settings.lastRestoreAccountEmail
+            if (settings.backupDocumentUri.isNotBlank()) {
+                prefs[BACKUP_DOCUMENT_URI] = settings.backupDocumentUri
+            }
+        }
+    }
+
 }
 
 data class AppSettings(

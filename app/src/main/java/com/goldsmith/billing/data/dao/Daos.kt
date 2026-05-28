@@ -14,11 +14,14 @@ interface CustomerDao {
     @Query("SELECT * FROM customers ORDER BY name ASC")
     suspend fun getAllCustomersSync(): List<Customer>
 
-    @Query("SELECT * FROM customers WHERE name LIKE '%' || :query || '%' OR phone LIKE '%' || :query || '%' OR companyName LIKE '%' || :query || '%' ORDER BY name ASC LIMIT 20")
+    @Query("SELECT * FROM customers WHERE name LIKE '%' || :query || '%' OR phone LIKE '%' || :query || '%' OR companyName LIKE '%' || :query || '%' OR city LIKE '%' || :query || '%' OR pincode LIKE '%' || :query || '%' ORDER BY name ASC LIMIT 20")
     fun searchCustomers(query: String): Flow<List<Customer>>
 
     @Query("SELECT * FROM customers WHERE id = :id")
     suspend fun getCustomerById(id: Long): Customer?
+
+    @Query("SELECT * FROM customers WHERE id = :id")
+    fun observeCustomerById(id: Long): Flow<Customer?>
 
     @Query("SELECT * FROM customers WHERE phone = :phone LIMIT 1")
     suspend fun getCustomerByPhone(phone: String): Customer?

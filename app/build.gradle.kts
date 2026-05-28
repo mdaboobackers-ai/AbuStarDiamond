@@ -13,8 +13,8 @@ android {
         applicationId = "com.goldsmith.billing"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "4.0.0-r1"
+        versionCode = 10
+        versionName = "4.0.0-r4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

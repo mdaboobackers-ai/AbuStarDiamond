@@ -28,7 +28,11 @@ data class Customer(
     val name: String,
     val companyName: String = "",
     val phone: String,
+    val doorNo: String = "",
     val address: String = "",
+    val city: String = "",
+    val state: String = "",
+    val pincode: String = "",
     val gstNumber: String = "",
     val email: String = "",
     val photoUri: String = "",
@@ -40,7 +44,12 @@ data class Customer(
     val cashBalance: Double = 0.0,
     val createdAt: Date = Date(),
     val updatedAt: Date = Date()
-)
+) {
+    fun fullAddress(): String =
+        listOf(doorNo, address, city, state, pincode)
+            .filter { it.isNotBlank() }
+            .joinToString(", ")
+}
 
 // ─── Invoice ──────────────────────────────────────────────────────────────────
 @Entity(

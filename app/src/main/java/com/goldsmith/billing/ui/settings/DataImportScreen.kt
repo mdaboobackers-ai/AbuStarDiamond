@@ -65,7 +65,8 @@ data class DataImportState(
     val loading: Boolean = false,
     val message: String = "",
     val imported: Int = 0,
-    val skipped: Int = 0
+    val skipped: Int = 0,
+    val rowsRead: Int = 0
 )
 
 @HiltViewModel
@@ -108,7 +109,21 @@ class DataImportViewModel @Inject constructor(
         _state.value = DataImportState(loading = true, message = "Reading spreadsheet...")
         runCatching {
             val rows = readRows()
-            if (mode == ImportMode.Customers) importCustomers(rows) else importBilling(rows)
+            if (rows.isEmpty()) {
+                return@runCatching DataImportState(
+                    message = "No readable rows found. Use the blank XLSX format and keep the header row.",
+                    imported = 0,
+                    skipped = 0,
+                    rowsRead = 0
+                )
+            }
+            val detectedMode = detectImportMode(rows, mode)
+            val result = if (detectedMode == ImportMode.Customers) importCustomers(rows) else importBilling(rows)
+            if (detectedMode != mode) {
+                result.copy(message = "Detected ${detectedMode.name.lowercase(Locale.ROOT)} file. ${result.message}", rowsRead = rows.size)
+            } else {
+                result.copy(rowsRead = rows.size)
+            }
         }.onSuccess { result ->
             _state.value = result
         }.onFailure { error ->
@@ -124,7 +139,11 @@ class DataImportViewModel @Inject constructor(
                 name = row.name,
                 phone = row.phone,
                 companyName = row.companyName,
+                doorNo = row.doorNo,
                 address = row.address,
+                city = row.city,
+                state = row.state,
+                pincode = row.pincode,
                 gstNumber = row.gstNumber,
                 email = row.email,
                 dob = row.dob,
@@ -134,7 +153,11 @@ class DataImportViewModel @Inject constructor(
                 name = row.name,
                 phone = row.phone,
                 companyName = row.companyName,
+                doorNo = row.doorNo,
                 address = row.address,
+                city = row.city,
+                state = row.state,
+                pincode = row.pincode,
                 gstNumber = row.gstNumber,
                 email = row.email,
                 dob = row.dob,
@@ -142,7 +165,12 @@ class DataImportViewModel @Inject constructor(
             )
             if (existing == null) customerDao.insertCustomer(customer) else customerDao.updateCustomer(customer)
         }
-        return DataImportState(message = "Customer import completed", imported = preview.rows.size, skipped = preview.skipped)
+        val message = if (preview.rows.isEmpty()) {
+            "No customers imported. Check name and phone columns."
+        } else {
+            "Customer import completed"
+        }
+        return DataImportState(message = message, imported = preview.rows.size, skipped = preview.skipped)
     }
 
     private suspend fun importBilling(rows: List<Map<String, String>>): DataImportState {
@@ -167,7 +195,11 @@ class DataImportViewModel @Inject constructor(
                     name = customerName,
                     phone = phone,
                     companyName = first.pick("shop", "shopname", "company", "companyname"),
-                    address = first.importAddress()
+                    doorNo = first.pick("door_no", "doorno", "door", "address_line_1", "addressline1", "address1"),
+                    address = first.pick("address", "address_line_2", "addressline2", "address2", "street", "area", "location"),
+                    city = first.pick("city", "town"),
+                    state = first.pick("state"),
+                    pincode = first.pick("pincode", "pin", "zipcode", "postalcode")
                 ).let { customerDao.getCustomerById(customerDao.insertCustomer(it))!! }
             }
             val itemPreview = SpreadsheetImportUtil.parseBillItems(invoiceRows)
@@ -211,7 +243,7 @@ class DataImportViewModel @Inject constructor(
                     customerId = customer.id,
                     customerShopName = customer.companyName.ifEmpty { customer.name },
                     customerOwnerName = customer.name,
-                    customerAddress = customer.address,
+                    customerAddress = customer.fullAddress(),
                     customerPhone = customer.phone,
                     date = Date(),
                     totalWeightGrams = GoldCalc.roundGrams(billDrafts.sumOf { it.netWeightGrams }),
@@ -242,7 +274,12 @@ class DataImportViewModel @Inject constructor(
             imported++
             skipped += itemPreview.skipped
         }
-        return DataImportState(message = "Billing import completed", imported = imported, skipped = skipped)
+        val message = if (imported == 0) {
+            "No bills imported. Check customer/phone and gross weight columns."
+        } else {
+            "Billing import completed"
+        }
+        return DataImportState(message = message, imported = imported, skipped = skipped)
     }
 
     private suspend fun recalculateCustomerBalances(customerId: Long, currentRate24K: Double) {
@@ -275,11 +312,11 @@ class DataImportViewModel @Inject constructor(
                 c.name,
                 c.phone,
                 c.companyName,
+                c.doorNo,
                 c.address,
-                "",
-                "",
-                "",
-                "",
+                c.city,
+                c.state,
+                c.pincode,
                 c.gstNumber,
                 c.email,
                 c.dob?.let(dateFormat::format).orEmpty(),
@@ -317,6 +354,19 @@ class DataImportViewModel @Inject constructor(
     private fun writeXlsx(context: android.content.Context, uri: Uri, bytes: ByteArray, message: String) {
         context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
         _state.value = DataImportState(message = message)
+    }
+
+    private fun detectImportMode(rows: List<Map<String, String>>, selectedMode: ImportMode): ImportMode {
+        val keys = rows.flatMap { it.keys }.toSet()
+        val billingSignals = setOf("invoiceno", "billno", "gross", "grossweight", "description", "item", "cashpaid")
+        val customerSignals = setOf("name", "shopname", "companyname", "doorno", "address", "city", "pincode", "dob", "anniversary")
+        val billingScore = billingSignals.count { it in keys }
+        val customerScore = customerSignals.count { it in keys }
+        return when {
+            billingScore >= 2 && billingScore > customerScore -> ImportMode.Billing
+            customerScore >= 2 && customerScore > billingScore -> ImportMode.Customers
+            else -> selectedMode
+        }
     }
 }
 
@@ -425,7 +475,7 @@ fun DataImportScreen(onBack: () -> Unit, viewModel: DataImportViewModel = hiltVi
                         Icon(Icons.Default.CloudDownload, null, tint = AuraColors.PrimaryContainer)
                         Column(Modifier.weight(1f)) {
                             Text(if (state.loading) "Importing..." else state.message.ifBlank { "Ready to import" }, color = AuraColors.OnSurface, style = MaterialTheme.typography.bodyLarge)
-                            Text("Imported: ${state.imported} | Skipped: ${state.skipped}", color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                            Text("Rows: ${state.rowsRead} | Imported: ${state.imported} | Skipped: ${state.skipped}", color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
@@ -502,7 +552,7 @@ private fun ImportModeChip(label: String, icon: androidx.compose.ui.graphics.vec
 
 private fun importHelp(mode: ImportMode): String =
     if (mode == ImportMode.Customers) {
-        "Columns: name, phone, shop/company, address, gst, email, dob, anniversary."
+        "Columns: name, phone, shop/company, door_no, address, city, state, pincode, gst, email, dob, anniversary."
     } else {
         "Columns: invoice_no, customer/name, phone, description, gross, less, purity or karat, making, stone, cash_paid."
     }
@@ -576,17 +626,6 @@ private fun ExportPinDialog(onDismiss: () -> Unit, onConfirm: (String, (String) 
 
 private fun Map<String, String>.pick(vararg keys: String): String =
     keys.firstNotNullOfOrNull { this[normalizeImportKey(it)]?.trim()?.takeIf(String::isNotBlank) }.orEmpty()
-
-private fun Map<String, String>.importAddress(): String {
-    val splitAddress = listOf(
-        pick("address_line_1", "addressline1", "address1", "street"),
-        pick("address_line_2", "addressline2", "address2", "area"),
-        pick("city", "town"),
-        pick("state"),
-        pick("pincode", "pin", "zipcode", "postalcode")
-    ).filter { it.isNotBlank() }.joinToString(", ")
-    return splitAddress.ifBlank { pick("address", "location") }
-}
 
 private fun normalizeImportKey(value: String): String =
     value.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }

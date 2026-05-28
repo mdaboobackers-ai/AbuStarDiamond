@@ -20,7 +20,11 @@ data class ImportedCustomerRow(
     val name: String,
     val phone: String,
     val companyName: String = "",
+    val doorNo: String = "",
     val address: String = "",
+    val city: String = "",
+    val state: String = "",
+    val pincode: String = "",
     val gstNumber: String = "",
     val email: String = "",
     val dob: Date? = null,
@@ -48,8 +52,8 @@ object SpreadsheetImportUtil {
             "name",
             "phone",
             "shop_name",
-            "address_line_1",
-            "address_line_2",
+            "door_no",
+            "address",
             "city",
             "state",
             "pincode",
@@ -80,8 +84,11 @@ object SpreadsheetImportUtil {
     suspend fun readRowsFromUri(context: Context, uri: Uri): List<Map<String, String>> = withContext(Dispatchers.IO) {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext emptyList()
         val name = uri.lastPathSegment.orEmpty().lowercase()
-        if (name.endsWith(".xlsx") || looksLikeXlsx(bytes)) parseXlsx(bytes) else parseCsv(String(bytes))
+        readRowsFromBytes(name, bytes)
     }
+
+    fun readRowsFromBytes(fileName: String, bytes: ByteArray): List<Map<String, String>> =
+        if (fileName.lowercase(Locale.ROOT).endsWith(".xlsx") || looksLikeXlsx(bytes)) parseXlsx(bytes) else parseCsv(String(bytes))
 
     suspend fun readRowsFromGoogleSheet(sheetUrl: String): List<Map<String, String>> = withContext(Dispatchers.IO) {
         val exportUrl = toCsvExportUrl(sheetUrl)
@@ -96,8 +103,8 @@ object SpreadsheetImportUtil {
     fun parseCustomers(rows: List<Map<String, String>>): ImportPreview<ImportedCustomerRow> {
         var skipped = 0
         val parsed = rows.mapNotNull { row ->
-            val name = row.pick("name", "customername", "ownername", "fullname")
-            val phone = row.pick("phone", "phonenumber", "mobile", "mobilenumber", "contact")
+            val name = row.pick("name", "customer", "customername", "ownername", "fullname")
+            val phone = cleanPhone(row.pick("phone", "phonenumber", "mobile", "mobilenumber", "contact"))
             if (name.isBlank() || phone.isBlank()) {
                 skipped++
                 null
@@ -105,8 +112,12 @@ object SpreadsheetImportUtil {
                 ImportedCustomerRow(
                     name = name,
                     phone = phone,
-                    companyName = row.pick("shopname", "companyname", "company", "businessname"),
-                    address = customerAddress(row),
+                    companyName = row.pick("shop", "shopname", "companyname", "company", "businessname"),
+                    doorNo = row.pick("doorno", "door", "addressline1", "address1", "addressone"),
+                    address = row.pick("address", "addressline2", "address2", "addresstwo", "street", "area", "location"),
+                    city = row.pick("city", "town"),
+                    state = row.pick("state"),
+                    pincode = row.pick("pincode", "pin", "zipcode", "postalcode"),
                     gstNumber = row.pick("gst", "gstnumber", "gstin"),
                     email = row.pick("email", "mail"),
                     dob = parseDate(row.pick("dob", "dateofbirth", "birthdate")),
@@ -212,10 +223,11 @@ object SpreadsheetImportUtil {
                 val ref = cell.getAttribute("r")
                 val col = columnIndex(ref.takeWhile { it.isLetter() })
                 val type = cell.getAttribute("t")
-                val value = cell.getElementsByTagName("v").item(0)?.textContent.orEmpty()
+                val value = cellValue(cell)
                 values[col] = when (type) {
                     "s" -> sharedStrings.getOrNull(value.toIntOrNull() ?: -1).orEmpty()
                     "inlineStr" -> cell.getElementsByTagName("t").item(0)?.textContent.orEmpty()
+                    "str" -> value
                     else -> value
                 }
             }
@@ -224,13 +236,21 @@ object SpreadsheetImportUtil {
     }
 
     private fun rowsToMaps(rows: List<List<String>>): List<Map<String, String>> {
-        val header = rows.firstOrNull()?.map(::normalizeHeader).orEmpty()
+        val headerRowIndex = rows.indexOfFirst { row -> row.any { normalizeHeader(it).isNotBlank() } }
+        if (headerRowIndex < 0) return emptyList()
+        val header = rows[headerRowIndex].map(::normalizeHeader)
         if (header.isEmpty()) return emptyList()
-        return rows.drop(1).map { row ->
+        return rows.drop(headerRowIndex + 1).map { row ->
             header.mapIndexedNotNull { index, key ->
                 if (key.isBlank()) null else key to row.getOrElse(index) { "" }
             }.toMap()
         }.filter { row -> row.values.any { it.isNotBlank() } }
+    }
+
+    private fun cellValue(cell: Element): String {
+        cell.getElementsByTagName("v").item(0)?.textContent?.let { return it }
+        cell.getElementsByTagName("t").item(0)?.textContent?.let { return it }
+        return cell.textContent.orEmpty().trim()
     }
 
     private fun newDocument(bytes: ByteArray) =
@@ -242,19 +262,16 @@ object SpreadsheetImportUtil {
     private fun Map<String, String>.pick(vararg keys: String): String =
         keys.firstNotNullOfOrNull { this[normalizeHeader(it)]?.trim()?.takeIf(String::isNotBlank) }.orEmpty()
 
-    private fun customerAddress(row: Map<String, String>): String {
-        val splitAddress = listOf(
-            row.pick("addressline1", "address1", "addressone", "street"),
-            row.pick("addressline2", "address2", "addresstwo", "area"),
-            row.pick("city", "town"),
-            row.pick("state"),
-            row.pick("pincode", "pin", "zipcode", "postalcode")
-        ).filter { it.isNotBlank() }.joinToString(", ")
-        return splitAddress.ifBlank { row.pick("address", "location") }
-    }
-
     private fun normalizeHeader(value: String): String =
         value.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
+
+    private fun cleanPhone(value: String): String {
+        val trimmed = value.trim()
+        if ('E' !in trimmed.uppercase(Locale.ROOT)) return trimmed
+        return runCatching {
+            java.math.BigDecimal(trimmed).toPlainString().substringBefore('.')
+        }.getOrDefault(trimmed)
+    }
 
     private fun columnIndex(col: String): Int =
         col.fold(0) { acc, ch -> acc * 26 + (ch.uppercaseChar() - 'A' + 1) } - 1

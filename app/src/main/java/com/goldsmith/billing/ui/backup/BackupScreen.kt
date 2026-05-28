@@ -25,12 +25,18 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.Scope
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.GlassCard
 import com.goldsmith.billing.ui.components.GoldButton
 import com.goldsmith.billing.ui.theme.AuraColors
 import com.goldsmith.billing.util.BackupFileConfig
+import com.goldsmith.billing.util.BackupCounts
 import com.goldsmith.billing.util.DataSyncManager
+import com.goldsmith.billing.util.DriveBackupConfig
 import com.goldsmith.billing.util.LocalBackupStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,7 +53,11 @@ import javax.inject.Inject
 sealed class BackupState {
     object Idle : BackupState()
     data class Running(val label: String) : BackupState()
-    data class Success(val message: String, val timestamp: Long = System.currentTimeMillis()) : BackupState()
+    data class Success(
+        val message: String,
+        val timestamp: Long = System.currentTimeMillis(),
+        val counts: BackupCounts? = null
+    ) : BackupState()
     data class Error(val message: String) : BackupState()
 }
 
@@ -70,13 +80,13 @@ class BackupViewModel @Inject constructor(
     fun saveBackup(uri: Uri) = viewModelScope.launch {
         _backupState.value = BackupState.Running("Saving backup")
         val manager = DataSyncManager(context)
-        val success = manager.exportBackupToUri(uri)
+        val now = System.currentTimeMillis()
+        val success = manager.exportBackupToUri(uri, now)
         if (success) {
             context.persistBackupUri(uri, write = true)
-            val now = System.currentTimeMillis()
             settingsRepo.updateBackupDocumentUri(uri.toString())
             settingsRepo.updateLastBackupTime(now)
-            _backupState.value = BackupState.Success("Backup saved safely")
+            _backupState.value = BackupState.Success("Backup saved safely", counts = manager.lastBackupCounts)
         } else {
             _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Backup failed")
         }
@@ -91,6 +101,37 @@ class BackupViewModel @Inject constructor(
         saveBackup(Uri.parse(saved))
     }
 
+    fun saveLocalBackup() = viewModelScope.launch {
+        _backupState.value = BackupState.Running("Saving local backup")
+        val manager = DataSyncManager(context)
+        val file = manager.createLocalBackupFile()
+        if (file != null) {
+            settingsRepo.updateLastBackupTime(System.currentTimeMillis())
+            _backupState.value = BackupState.Success("Local backup saved: ${file.name}", counts = manager.lastBackupCounts)
+        } else {
+            _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Local backup failed")
+        }
+    }
+
+    fun saveLocalAndUploadToDrive(account: GoogleSignInAccount) = viewModelScope.launch {
+        _backupState.value = BackupState.Running("Saving local backup")
+        val manager = DataSyncManager(context, account)
+        val file = manager.createLocalBackupFile()
+        if (file == null) {
+            _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Local backup failed")
+            return@launch
+        }
+        _backupState.value = BackupState.Running("Uploading local backup to Google Drive")
+        val uploaded = manager.uploadLocalBackupToDrive(file)
+        if (uploaded) {
+            settingsRepo.updateLastBackupTime(System.currentTimeMillis())
+            settingsRepo.updateLastBackupAccountEmail(account.email.orEmpty())
+            _backupState.value = BackupState.Success("Local backup saved and copied to Google Drive", counts = manager.lastBackupCounts)
+        } else {
+            _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Google Drive upload failed")
+        }
+    }
+
     fun mergeBackup(uri: Uri) = viewModelScope.launch {
         _backupState.value = BackupState.Running("Merging backup")
         val manager = DataSyncManager(context)
@@ -98,7 +139,7 @@ class BackupViewModel @Inject constructor(
         if (success) {
             context.persistBackupUri(uri, write = false)
             settingsRepo.updateLastRestoreAccountEmail("File restore")
-            _backupState.value = BackupState.Success("Backup merged with this device")
+            _backupState.value = BackupState.Success("Backup merged with this device", counts = manager.lastBackupCounts)
         } else {
             _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Restore failed")
         }
@@ -164,6 +205,36 @@ fun BackupScreen(
         createBackupLauncher.launch(BackupFileConfig.defaultFileName())
     }
 
+    fun driveSignInIntent() = GoogleSignIn.getClient(
+        context,
+        GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(Scope(DriveBackupConfig.SCOPE))
+            .build()
+    ).signInIntent
+
+    val driveSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val account = runCatching { GoogleSignIn.getSignedInAccountFromIntent(result.data).result }.getOrNull()
+        if (account != null) {
+            viewModel.saveLocalAndUploadToDrive(account)
+            refreshLatestAutoBackup()
+        } else {
+            viewModel.resetState()
+        }
+    }
+
+    fun saveLocalAndUpload() {
+        val account = GoogleSignIn.getLastSignedInAccount(context)
+        if (account != null && GoogleSignIn.hasPermissions(account, Scope(DriveBackupConfig.SCOPE))) {
+            viewModel.saveLocalAndUploadToDrive(account)
+            refreshLatestAutoBackup()
+        } else {
+            driveSignInLauncher.launch(driveSignInIntent())
+        }
+    }
+
     val autoBackupPath = remember { LocalBackupStore.backupDir(context).absolutePath }
 
     Scaffold(
@@ -213,26 +284,26 @@ fun BackupScreen(
                         SectionHeader(
                             icon = Icons.Default.Save,
                             title = "Save Backup",
-                            subtitle = "Creates one encrypted backup file. Choose Google Drive from the file picker if you want cloud copy."
+                            subtitle = "Quick Save stores an encrypted .asdb file inside the app backup folder."
                         )
                         GoldButton(
-                            text = if (backupState is BackupState.Running) "Working..." else "Quick Save",
-                            onClick = { viewModel.quickSaveBackup(::chooseBackupLocation) },
+                            text = if (backupState is BackupState.Running) "Working..." else "Quick Save Local Backup",
+                            onClick = { viewModel.saveLocalBackup(); refreshLatestAutoBackup() },
                             modifier = Modifier.fillMaxWidth(),
                             enabled = backupState !is BackupState.Running,
                             icon = { Icon(Icons.Default.Save, null, modifier = Modifier.size(18.dp)) }
                         )
                         OutlinedButton(
-                            onClick = ::chooseBackupLocation,
+                            onClick = ::saveLocalAndUpload,
                             modifier = Modifier.fillMaxWidth().height(48.dp),
                             enabled = backupState !is BackupState.Running,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.OnSurface),
-                            border = BorderStroke(1.dp, AuraColors.GlassWhite20),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
+                            border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f)),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Icon(Icons.Default.DriveFileRenameOutline, null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.CloudUpload, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("SAVE AS NEW BACKUP", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+                            Text("SAVE LOCAL + GOOGLE DRIVE", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
                         }
                     }
                 }
@@ -414,7 +485,10 @@ private fun BackupHeroCard(
                         when (state) {
                             is BackupState.Idle -> if (lastBackup > 0) "Last backup ${sdf.format(Date(lastBackup))}" else "No backup saved yet"
                             is BackupState.Running -> "${state.label}..."
-                            is BackupState.Success -> "${state.message} at ${sdf.format(Date(state.timestamp))}"
+                            is BackupState.Success -> buildString {
+                                append("${state.message} at ${sdf.format(Date(state.timestamp))}")
+                                state.counts?.let { append("\n${it.summary()}") }
+                            }
                             is BackupState.Error -> state.message
                         },
                         style = MaterialTheme.typography.bodyMedium,
