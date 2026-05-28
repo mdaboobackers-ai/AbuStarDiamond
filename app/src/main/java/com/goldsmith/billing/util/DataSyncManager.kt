@@ -354,47 +354,51 @@ class DataSyncManager(
     }
 
     private suspend fun buildPayload(backupTimeOverride: Long? = null): SyncPayload {
-        val allInvoices = db.invoiceDao().getAllInvoices().first()
-        val allCustomers = db.customerDao().getAllCustomers().first()
-        val allMelting = db.meltingDao().getAllMeltingRecords().first()
-        val allRates = db.goldRateDao().getRateHistory().first()
-        val allPayments = db.invoicePaymentDao().getAllPayments().first()
-        val settings = settingsRepo.settingsFlow.first().let { current ->
+        // FIX: Use *Sync suspend functions instead of flow.first() to guarantee
+        // all rows are read from the DB in a single consistent snapshot.
+        // flow.first() can miss the last write if the Room invalidation hasn't fired yet.
+        val allInvoices  = db.invoiceDao().getAllInvoicesSync()
+        val allCustomers = db.customerDao().getAllCustomersSync()
+        val allMelting   = db.meltingDao().getAllMeltingRecordsSync()
+        val allRates     = db.goldRateDao().getRateHistory().first()   // no sync variant – flow is fine here
+        val allPayments  = db.invoicePaymentDao().getAllPaymentsSync()
+        val settings     = settingsRepo.settingsFlow.first().let { current ->
             backupTimeOverride?.let { current.copy(lastBackupTime = it) } ?: current
         }
 
         return SyncPayload(
-            customers = allCustomers,
-            invoices = allInvoices,
-            billItems = fetchAllBillItems(allInvoices),
+            customers      = allCustomers,
+            invoices       = allInvoices,
+            billItems      = fetchAllBillItems(allInvoices),
             invoicePayments = allPayments,
             meltingRecords = allMelting,
-            goldRates = allRates,
+            goldRates      = allRates,
             companyProfile = db.companyProfileDao().getProfileSync(),
-            appSettings = settings,
-            deviceId = android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+            appSettings    = settings,
+            deviceId       = android.provider.Settings.Secure.getString(
+                context.contentResolver, android.provider.Settings.Secure.ANDROID_ID
+            )
         )
     }
 
     private suspend fun fetchAllBillItems(invoices: List<Invoice>): List<BillItem> {
         val items = mutableListOf<BillItem>()
-        invoices.forEach { 
+        invoices.forEach {
             items.addAll(db.billItemDao().getBillItemsForInvoiceSync(it.id))
         }
         return items
     }
 
     private suspend fun smartMerge(remote: SyncPayload) {
-        val customerIdMap = mutableMapOf<Long, Long>()
-        val invoiceIdMap = mutableMapOf<Long, Long>()
-        val paymentIdMap = mutableMapOf<Long, Long>()
-        val invoiceIdsReceivingRemoteRows = mutableSetOf<Long>()
+        val customerIdMap  = mutableMapOf<Long, Long>()
+        val invoiceIdMap   = mutableMapOf<Long, Long>()
+        val paymentIdMap   = mutableMapOf<Long, Long>()
 
         val localCustomersByKey = db.customerDao().getAllCustomersSync()
             .associateBy { BackupMergeIdentity.customerKey(it) }
             .toMutableMap()
 
-        // 1. Customers merge by stable business identity. Local Room ids collide across reinstalls/offline devices.
+        // ── 1. Customers ──────────────────────────────────────────────────────
         remote.customers.forEach { remoteCust ->
             val remoteKey = BackupMergeIdentity.customerKey(remoteCust)
             val localCust = localCustomersByKey[remoteKey]
@@ -413,65 +417,76 @@ class DataSyncManager(
             customerIdMap[remoteCust.id] = localId
         }
 
-        // 2. Invoices merge by invoice number. This preserves independent offline bills.
+        // ── 2. Invoices ───────────────────────────────────────────────────────
+        // FIX: Track which LOCAL invoice ids we actually processed from the remote
+        // payload. We always replace bill items for these, regardless of timestamp.
+        val processedLocalInvoiceIds = mutableSetOf<Long>()
+
         remote.invoices.forEach { remoteInv ->
-            val mappedCustomerId = customerIdMap[remoteInv.customerId] ?: customerIdFromInvoiceSnapshot(remoteInv, localCustomersByKey).also {
-                customerIdMap[remoteInv.customerId] = it
-            }
+            val mappedCustomerId = customerIdMap[remoteInv.customerId]
+                ?: customerIdFromInvoiceSnapshot(remoteInv, localCustomersByKey).also {
+                    customerIdMap[remoteInv.customerId] = it
+                }
             val normalizedRemote = invoiceWithCustomerSnapshot(remoteInv, mappedCustomerId)
             val localInv = db.invoiceDao().getInvoiceByNumber(remoteInv.invoiceNumber)
             val localId = if (localInv == null) {
-                db.invoiceDao().insertInvoice(normalizedRemote.copy(id = 0)).also {
-                    invoiceIdsReceivingRemoteRows += it
-                }
+                db.invoiceDao().insertInvoice(normalizedRemote.copy(id = 0))
             } else {
-                if (db.billItemDao().getBillItemsForInvoiceSync(localInv.id).isEmpty()) {
-                    invoiceIdsReceivingRemoteRows += localInv.id
-                }
                 if (remoteInv.updatedAt.after(localInv.updatedAt)) {
                     db.invoiceDao().updateInvoice(normalizedRemote.copy(id = localInv.id))
-                    invoiceIdsReceivingRemoteRows += localInv.id
-                } else if (localInv.customerOwnerName.isBlank() || localInv.customerShopName.isBlank() || localInv.customerPhone.isBlank()) {
+                } else if (localInv.customerOwnerName.isBlank() ||
+                    localInv.customerShopName.isBlank() ||
+                    localInv.customerPhone.isBlank()
+                ) {
                     db.invoiceDao().updateInvoice(
                         localInv.copy(
-                            customerId = mappedCustomerId,
-                            customerShopName = normalizedRemote.customerShopName,
+                            customerId        = mappedCustomerId,
+                            customerShopName  = normalizedRemote.customerShopName,
                             customerOwnerName = normalizedRemote.customerOwnerName,
-                            customerAddress = normalizedRemote.customerAddress,
-                            customerPhone = normalizedRemote.customerPhone
+                            customerAddress   = normalizedRemote.customerAddress,
+                            customerPhone     = normalizedRemote.customerPhone
                         )
                     )
                 }
                 localInv.id
             }
             invoiceIdMap[remoteInv.id] = localId
-        }
-        
-        // 3. Bill Items: replace item rows only for invoices we mapped from the remote payload.
-        remote.billItems.groupBy { it.invoiceId }.forEach { (remoteInvoiceId, items) ->
-            val localInvoiceId = invoiceIdMap[remoteInvoiceId] ?: return@forEach
-            if (localInvoiceId !in invoiceIdsReceivingRemoteRows) return@forEach
-            db.billItemDao().deleteAllItemsForInvoice(localInvoiceId)
-            db.billItemDao().insertBillItems(items.map { it.copy(id = 0, invoiceId = localInvoiceId) })
+            processedLocalInvoiceIds += localId      // FIX: always mark this invoice
         }
 
-        // 4. Payments: merge by invoice + payment details so offline payment rows do not collide by id.
+        // ── 3. Bill Items ─────────────────────────────────────────────────────
+        // FIX: Replace bill items for EVERY invoice that came from the remote payload.
+        // Old code skipped invoices whose timestamp hadn't changed → items were NOT
+        // refreshed on repeated import → first item was lost each cycle.
+        remote.billItems.groupBy { it.invoiceId }.forEach { (remoteInvoiceId, items) ->
+            val localInvoiceId = invoiceIdMap[remoteInvoiceId] ?: return@forEach
+            if (localInvoiceId !in processedLocalInvoiceIds) return@forEach
+            db.billItemDao().deleteAllItemsForInvoice(localInvoiceId)
+            db.billItemDao().insertBillItems(
+                items.map { it.copy(id = 0, invoiceId = localInvoiceId) }
+            )
+        }
+
+        // ── 4. Payments ───────────────────────────────────────────────────────
         remote.invoicePayments.orEmpty().forEach { remotePayment ->
             val localInvoiceId = invoiceIdMap[remotePayment.invoiceId] ?: return@forEach
             val existing = db.invoicePaymentDao().getPaymentsForInvoiceSync(localInvoiceId)
                 .firstOrNull { it.samePaymentAs(remotePayment) }
-            val localPaymentId = existing?.id ?: db.invoicePaymentDao().insertPayment(remotePayment.copy(id = 0, invoiceId = localInvoiceId))
+            val localPaymentId = existing?.id
+                ?: db.invoicePaymentDao().insertPayment(
+                    remotePayment.copy(id = 0, invoiceId = localInvoiceId)
+                )
             paymentIdMap[remotePayment.id] = localPaymentId
         }
 
-        // 5. Melting: preserve links to the remapped invoice/payment rows.
+        // ── 5. Melting ────────────────────────────────────────────────────────
         val localMelting = db.meltingDao().getAllMeltingRecordsSync()
         remote.meltingRecords.forEach { remoteMelt ->
-            val mappedInvoiceId = remoteMelt.linkedInvoiceId?.let { invoiceIdMap[it] }
-            val mappedPaymentId = remoteMelt.linkedPaymentId?.let { paymentIdMap[it] }
+            val mappedInvoiceId  = remoteMelt.linkedInvoiceId?.let { invoiceIdMap[it] }
+            val mappedPaymentId  = remoteMelt.linkedPaymentId?.let { paymentIdMap[it] }
             val mappedCustomerId = customerIdMap[remoteMelt.customerId] ?: remoteMelt.customerId
             val normalizedRemote = remoteMelt.copy(
-                customerId = mappedCustomerId,
+                customerId      = mappedCustomerId,
                 linkedInvoiceId = mappedInvoiceId,
                 linkedPaymentId = mappedPaymentId
             )

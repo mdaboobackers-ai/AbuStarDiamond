@@ -17,12 +17,13 @@ import java.io.FileOutputStream
 import java.util.Collections
 
 object DriveBackupConfig {
-    const val REMOTE_FILE = "goldsmith_sync_v3.enc"
+    const val REMOTE_FILE       = "goldsmith_sync_v3.enc"
     const val LEGACY_REMOTE_FILE = "goldsmith_sync_v2.json"
-    const val SPACE = "appDataFolder"
-    const val PARENT = "appDataFolder"
-    const val SCOPE = DriveScopes.DRIVE_APPDATA
-    const val FILE_QUERY = "name = '$REMOTE_FILE' and '$PARENT' in parents and trashed = false"
+    // FIX: Use DRIVE_FILE (visible) scope so we can create the "ASD" folder in Drive.
+    // DRIVE_APPDATA is hidden/private and cannot create named visible folders.
+    const val SCOPE             = DriveScopes.DRIVE_FILE
+    // ASD folder name as required by the client
+    const val ASD_FOLDER_NAME   = "ASD"
 
     fun normalizeEmail(email: String?): String = email?.trim()?.lowercase().orEmpty()
     fun resolveActiveAccountEmail(pickerEmail: String?, lastSignedInEmail: String?): String =
@@ -53,32 +54,61 @@ class GoogleDriveHelper(
         if (!GoogleSignIn.hasPermissions(account, Scope(DriveBackupConfig.SCOPE))) {
             throw DriveBackupException("Google Drive permission is missing. Please choose the account again and allow Drive backup access.")
         }
-        val credential = GoogleAccountCredential.usingOAuth2(context, Collections.singleton(DriveBackupConfig.SCOPE))
+        val credential = GoogleAccountCredential.usingOAuth2(
+            context, Collections.singleton(DriveBackupConfig.SCOPE)
+        )
         credential.selectedAccountName = email
-        
+
         return Drive.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), credential)
             .setApplicationName("Abu Star Diamonds")
             .build()
     }
 
+    /**
+     * FIX: Find or create the "ASD" folder in Drive root.
+     * Returns the folder id.
+     */
+    private fun getOrCreateAsdFolder(service: Drive): String {
+        val query = "name = '${DriveBackupConfig.ASD_FOLDER_NAME}' " +
+                "and mimeType = 'application/vnd.google-apps.folder' " +
+                "and trashed = false"
+        val result = service.files().list()
+            .setQ(query)
+            .setSpaces("drive")
+            .setFields("files(id, name)")
+            .execute()
+        val existing = result.files.firstOrNull()
+        if (existing != null) return existing.id
+
+        // Create the ASD folder
+        val folderMeta = File().apply {
+            name = DriveBackupConfig.ASD_FOLDER_NAME
+            mimeType = "application/vnd.google-apps.folder"
+        }
+        val created = service.files().create(folderMeta)
+            .setFields("id")
+            .execute()
+        return created.id
+    }
+
     suspend fun uploadFile(localFile: java.io.File, remoteName: String): String? = withContext(Dispatchers.IO) {
         val service = driveService()
-        
-        val existingFile = findFile(remoteName)
-        
-        val metadata = File().apply {
-            name = remoteName
-            parents = listOf(DriveBackupConfig.PARENT)
-        }
-        
+        val folderId = getOrCreateAsdFolder(service)
+
+        val existingFile = findFileInFolder(service, folderId, remoteName)
         val content = FileContent("application/octet-stream", localFile)
-        
+
         return@withContext if (existingFile != null) {
+            // Update existing file — no parent needed for update
             service.files().update(existingFile.id, File().setName(remoteName), content)
                 .setFields("id, modifiedTime")
                 .execute()
                 .id
         } else {
+            val metadata = File().apply {
+                name = remoteName
+                parents = listOf(folderId)
+            }
             service.files().create(metadata, content)
                 .setFields("id, modifiedTime")
                 .execute()
@@ -88,27 +118,30 @@ class GoogleDriveHelper(
 
     suspend fun downloadFile(remoteName: String, targetFile: java.io.File): Boolean = withContext(Dispatchers.IO) {
         val service = driveService()
-        val file = findFile(remoteName) ?: return@withContext false
-        
+        val folderId = getOrCreateAsdFolder(service)
+        val file = findFileInFolder(service, folderId, remoteName) ?: return@withContext false
+
         FileOutputStream(targetFile).use { outputStream ->
             service.files().get(file.id).executeMediaAndDownloadTo(outputStream)
         }
         true
     }
 
-    private fun findFile(name: String): File? {
-        val service = driveService()
+    private fun findFileInFolder(service: Drive, folderId: String, name: String): File? {
         val escapedName = name.replace("'", "\\'")
         val result = service.files().list()
-            .setQ("name = '$escapedName' and '${DriveBackupConfig.PARENT}' in parents and trashed = false")
-            .setSpaces(DriveBackupConfig.SPACE)
+            .setQ("name = '$escapedName' and '$folderId' in parents and trashed = false")
+            .setSpaces("drive")
             .setOrderBy("modifiedTime desc")
+            .setFields("files(id, name, modifiedTime)")
             .execute()
         return result.files.firstOrNull()
     }
 
     suspend fun latestBackupModifiedTime(): Long? = withContext(Dispatchers.IO) {
-        findFile(DriveBackupConfig.REMOTE_FILE)?.modifiedTime?.value
-            ?: findFile(DriveBackupConfig.LEGACY_REMOTE_FILE)?.modifiedTime?.value
+        val service = driveService()
+        val folderId = getOrCreateAsdFolder(service)
+        findFileInFolder(service, folderId, DriveBackupConfig.REMOTE_FILE)?.modifiedTime?.value
+            ?: findFileInFolder(service, folderId, DriveBackupConfig.LEGACY_REMOTE_FILE)?.modifiedTime?.value
     }
 }

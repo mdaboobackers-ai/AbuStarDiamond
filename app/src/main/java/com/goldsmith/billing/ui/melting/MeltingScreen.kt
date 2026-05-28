@@ -92,33 +92,46 @@ class MeltingViewModel @Inject constructor(
     fun saveRecord(record: MeltingRecord, previous: MeltingRecord? = null, onDone: () -> Unit) = viewModelScope.launch {
         val expectedPure = record.expectedPureWeightGrams.takeIf { it > 0.0 }
             ?: GoldCalc.fineGold(record.rawWeightGrams, record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent)
+
+        // FIX: Do NOT recalculate the status here — the dialog already computed the
+        // correct status (TESTED or ADJUSTED) and passed it in record.status.
+        // Only fall back to PENDING if this is a brand-new invoice-linked record.
+        val resolvedStatus = when {
+            previous == null && record.linkedInvoiceId != null -> MeltingStatus.PENDING.name
+            record.status.isNotBlank() -> record.status   // use what the dialog decided
+            kotlin.math.abs(record.finalPureWeightGrams - expectedPure) > 0.000001 -> MeltingStatus.ADJUSTED.name
+            else -> MeltingStatus.TESTED.name
+        }
+
         val normalizedRecord = record.copy(
             expectedPureWeightGrams = expectedPure,
-            expectedPurityPercent = record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent,
-            status = when {
-                previous == null && record.linkedInvoiceId != null -> MeltingStatus.PENDING.name
-                kotlin.math.abs(record.finalPureWeightGrams - expectedPure) > 0.000001 -> MeltingStatus.ADJUSTED.name
-                else -> MeltingStatus.TESTED.name
-            },
-            updatedAt = Date()
+            expectedPurityPercent   = record.expectedPurityPercent.takeIf { it > 0.0 } ?: record.purityPercent,
+            status                  = resolvedStatus,
+            updatedAt               = Date()
         )
         meltingDao.insertMeltingRecord(normalizedRecord)
+
         val linkedInvoice = normalizedRecord.linkedInvoiceId?.let { invoiceDao.getInvoiceById(it) }
         val meltingCashDelta = if (previous != null && linkedInvoice != null) {
-            GoldCalc.roundMoney((previous.finalPureWeightGrams - normalizedRecord.finalPureWeightGrams) * linkedInvoice.goldRate24K)
+            GoldCalc.roundMoney(
+                (previous.finalPureWeightGrams - normalizedRecord.finalPureWeightGrams) * linkedInvoice.goldRate24K
+            )
         } else {
             0.0
         }
         linkedInvoice?.let { invoice ->
             if (previous != null) {
                 val newRemaining = GoldCalc.roundMoney(invoice.remainingBalance + meltingCashDelta)
-                invoiceDao.updateInvoice(invoice.copy(
-                    remainingBalance = newRemaining,
-                    paymentStatus = if (newRemaining <= 0.0) com.goldsmith.billing.data.model.PaymentStatus.PAID else com.goldsmith.billing.data.model.PaymentStatus.PARTIAL,
-                    updatedAt = Date()
-                ))
-            } else {
-                invoice.remainingBalance
+                invoiceDao.updateInvoice(
+                    invoice.copy(
+                        remainingBalance = newRemaining,
+                        paymentStatus    = if (newRemaining <= 0.0)
+                            com.goldsmith.billing.data.model.PaymentStatus.PAID
+                        else
+                            com.goldsmith.billing.data.model.PaymentStatus.PARTIAL,
+                        updatedAt = Date()
+                    )
+                )
             }
         }
         if (linkedInvoice == null) {
@@ -128,10 +141,7 @@ class MeltingViewModel @Inject constructor(
                 } else {
                     customer.goldBalanceGrams + previous.finalPureWeightGrams - normalizedRecord.finalPureWeightGrams
                 }
-                customerDao.updateCustomer(customer.copy(
-                    goldBalanceGrams = newGoldBalance,
-                    updatedAt = Date()
-                ))
+                customerDao.updateCustomer(customer.copy(goldBalanceGrams = newGoldBalance, updatedAt = Date()))
             }
         }
         linkedInvoice?.let { recalculateCustomerBalances(normalizedRecord.customerId, it.goldRate24K) }
@@ -182,9 +192,10 @@ fun MeltingScreen(
     var deleteTarget by remember { mutableStateOf<MeltingRecord?>(null) }
     var editTarget by remember { mutableStateOf<MeltingRecord?>(null) }
     var statusFilter by remember { mutableStateOf(MeltingStatus.PENDING.name) }
-    val pendingCount = records.count { it.record.status == MeltingStatus.PENDING.name }
-    val testedCount = records.count { it.record.status == MeltingStatus.TESTED.name }
+    val pendingCount  = records.count { it.record.status == MeltingStatus.PENDING.name }
+    val testedCount   = records.count { it.record.status == MeltingStatus.TESTED.name }
     val adjustedCount = records.count { it.record.status == MeltingStatus.ADJUSTED.name }
+    val approvedCount = records.count { it.record.status == MeltingStatus.APPROVED.name }
     val filteredRecords = records.filter { it.record.status == statusFilter }
 
     Scaffold(
@@ -235,9 +246,10 @@ fun MeltingScreen(
                             }
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            QueueChip("Pending", pendingCount, statusFilter == MeltingStatus.PENDING.name) { statusFilter = MeltingStatus.PENDING.name }
-                            QueueChip("Tested", testedCount, statusFilter == MeltingStatus.TESTED.name) { statusFilter = MeltingStatus.TESTED.name }
+                            QueueChip("Pending",  pendingCount,  statusFilter == MeltingStatus.PENDING.name)  { statusFilter = MeltingStatus.PENDING.name }
+                            QueueChip("Tested",   testedCount,   statusFilter == MeltingStatus.TESTED.name)   { statusFilter = MeltingStatus.TESTED.name }
                             QueueChip("Adjusted", adjustedCount, statusFilter == MeltingStatus.ADJUSTED.name) { statusFilter = MeltingStatus.ADJUSTED.name }
+                            QueueChip("Approved", approvedCount, statusFilter == MeltingStatus.APPROVED.name) { statusFilter = MeltingStatus.APPROVED.name }
                         }
                     }
                 }
@@ -592,29 +604,34 @@ private fun AddMeltingDialog(viewModel: MeltingViewModel, current: MeltingRecord
             val cust = selectedCustomer
             val customerId = cust?.id ?: current?.customerId
             if (customerId != null && rawWeight.isNotEmpty()) {
-                val raw = rawWeight.toDoubleOrNull() ?: 0.0
-                val testedPurity = purity.toDoubleOrNull() ?: 91.6
+                val raw           = rawWeight.toDoubleOrNull() ?: 0.0
+                val testedPurity  = purity.toDoubleOrNull() ?: 91.6
                 val testedPureWeight = finalWeight.toDoubleOrNull()
                     ?: if (raw > 0.0) GoldCalc.fineGold(raw, testedPurity) else 0.0
                 val expectedPurity = current?.expectedPurityPercent?.takeIf { it > 0.0 } ?: testedPurity
-                val expectedPure = current?.expectedPureWeightGrams?.takeIf { it > 0.0 } ?: GoldCalc.fineGold(raw, expectedPurity)
-                val reviewedStatus = if (kotlin.math.abs(testedPureWeight - expectedPure) > 0.000001) {
-                    MeltingStatus.ADJUSTED.name
-                } else {
-                    MeltingStatus.TESTED.name
+                val expectedPure   = current?.expectedPureWeightGrams?.takeIf { it > 0.0 }
+                    ?: GoldCalc.fineGold(raw, expectedPurity)
+
+                // FIX: when approving an existing record (current != null), always set
+                // APPROVED so it moves to the Approved tab. The weight difference determines
+                // ADJUSTED only when saving a NEW melting record (current == null).
+                val finalStatus = when {
+                    current != null -> MeltingStatus.APPROVED.name   // user clicked "Approve Test"
+                    kotlin.math.abs(testedPureWeight - expectedPure) > 0.000001 -> MeltingStatus.ADJUSTED.name
+                    else -> MeltingStatus.TESTED.name
                 }
                 onSave(MeltingRecord(
-                    customerId = customerId,
-                    rawWeightGrams = raw,
-                    finalPureWeightGrams = testedPureWeight,
-                    purityPercent = testedPurity,
+                    customerId              = customerId,
+                    rawWeightGrams          = raw,
+                    finalPureWeightGrams    = testedPureWeight,
+                    purityPercent           = testedPurity,
                     expectedPureWeightGrams = expectedPure,
-                    expectedPurityPercent = expectedPurity,
-                    status = reviewedStatus,
-                    notes = notes,
-                    imageUris = attachedImages,
-                    linkedInvoiceId = current?.linkedInvoiceId,
-                    linkedPaymentId = current?.linkedPaymentId
+                    expectedPurityPercent   = expectedPurity,
+                    status                  = finalStatus,
+                    notes                   = notes,
+                    imageUris               = attachedImages,
+                    linkedInvoiceId         = current?.linkedInvoiceId,
+                    linkedPaymentId         = current?.linkedPaymentId
                 ))
             }
         })},

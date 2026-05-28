@@ -170,7 +170,7 @@ data class MeltingRecord(
     val updatedAt: Date = Date()
 )
 
-enum class MeltingStatus { PENDING, TESTED, ADJUSTED }
+enum class MeltingStatus { PENDING, TESTED, ADJUSTED, APPROVED }
 
 // ─── Invoice Payment ──────────────────────────────────────────────────────────
 @Entity(

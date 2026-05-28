@@ -246,27 +246,43 @@ class HistoryViewModel @Inject constructor(
         val linkedMeltingRecords = meltingDao.getMeltingRecordsByPayment(payment.id)
         if (mode == "GOLD" && updatedPayment.goldGrams > 0.0) {
             val expectedPurity = (updatedPayment.goldKarat / 24.0) * 100.0
-            val expectedPure = GoldCalc.pureGoldFromKarat(updatedPayment.goldGrams, updatedPayment.goldKarat)
-            val existing = linkedMeltingRecords.firstOrNull()
+            val expectedPure   = GoldCalc.pureGoldFromKarat(updatedPayment.goldGrams, updatedPayment.goldKarat)
+            val existing       = linkedMeltingRecords.firstOrNull()
+
+            // FIX: if the gold amount changed, the previously tested/adjusted values are
+            // no longer valid — reset to PENDING so the goldsmith reviews it fresh.
+            val goldAmountChanged = existing != null &&
+                kotlin.math.abs(existing.rawWeightGrams - updatedPayment.goldGrams) > 0.0005
+
             val syncedRecord = (existing ?: MeltingRecord(
-                customerId = invoice.customerId,
-                rawWeightGrams = updatedPayment.goldGrams,
+                customerId           = invoice.customerId,
+                rawWeightGrams       = updatedPayment.goldGrams,
                 finalPureWeightGrams = expectedPure,
-                purityPercent = expectedPurity,
-                linkedInvoiceId = invoice.id,
-                linkedPaymentId = updatedPayment.id
+                purityPercent        = expectedPurity,
+                linkedInvoiceId      = invoice.id,
+                linkedPaymentId      = updatedPayment.id
             )).copy(
-                customerId = invoice.customerId,
-                rawWeightGrams = updatedPayment.goldGrams,
+                customerId              = invoice.customerId,
+                rawWeightGrams          = updatedPayment.goldGrams,
                 expectedPureWeightGrams = expectedPure,
-                expectedPurityPercent = expectedPurity,
-                finalPureWeightGrams = if (existing?.status == MeltingStatus.TESTED.name || existing?.status == MeltingStatus.ADJUSTED.name) existing.finalPureWeightGrams else expectedPure,
-                purityPercent = if (existing?.status == MeltingStatus.TESTED.name || existing?.status == MeltingStatus.ADJUSTED.name) existing.purityPercent else expectedPurity,
-                status = existing?.status ?: MeltingStatus.PENDING.name,
-                notes = "Synced from edited payment for Invoice #${invoice.invoiceNumber}",
-                linkedInvoiceId = invoice.id,
-                linkedPaymentId = updatedPayment.id,
-                updatedAt = Date()
+                expectedPurityPercent   = expectedPurity,
+                // FIX: reset tested values and status to PENDING when grams changed
+                finalPureWeightGrams    = if (goldAmountChanged) expectedPure else
+                    (if (existing?.status == MeltingStatus.TESTED.name ||
+                        existing?.status == MeltingStatus.ADJUSTED.name ||
+                        existing?.status == MeltingStatus.APPROVED.name)
+                        existing.finalPureWeightGrams else expectedPure),
+                purityPercent           = if (goldAmountChanged) expectedPurity else
+                    (if (existing?.status == MeltingStatus.TESTED.name ||
+                        existing?.status == MeltingStatus.ADJUSTED.name ||
+                        existing?.status == MeltingStatus.APPROVED.name)
+                        existing.purityPercent else expectedPurity),
+                status                  = if (goldAmountChanged) MeltingStatus.PENDING.name
+                    else (existing?.status ?: MeltingStatus.PENDING.name),
+                notes                   = "Synced from edited payment for Invoice #${invoice.invoiceNumber}",
+                linkedInvoiceId         = invoice.id,
+                linkedPaymentId         = updatedPayment.id,
+                updatedAt               = Date()
             )
             meltingDao.insertMeltingRecord(syncedRecord)
         } else if (linkedMeltingRecords.isNotEmpty()) {
