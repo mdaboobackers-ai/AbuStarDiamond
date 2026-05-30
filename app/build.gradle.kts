@@ -7,12 +7,12 @@ plugins {
 
 android {
     namespace = "com.goldsmith.billing"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.goldsmith.billing"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 10
         versionName = "4.0.0-r4"
 
@@ -28,7 +28,7 @@ android {
     buildTypes {
         debug {
             isDebuggable = true
-            applicationIdSuffix = ".debug"
+            applicationIdSuffix = ""
         }
         create("upgrade") {
             initWith(getByName("debug"))

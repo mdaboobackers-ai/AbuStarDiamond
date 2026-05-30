@@ -7,6 +7,7 @@ import com.goldsmith.billing.data.model.*
 import com.goldsmith.billing.data.repository.AppSettings
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.security.KeystoreManager
+import com.goldsmith.billing.util.CustomerIdentity.withStableExternalId
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
@@ -358,7 +359,11 @@ class DataSyncManager(
         // all rows are read from the DB in a single consistent snapshot.
         // flow.first() can miss the last write if the Room invalidation hasn't fired yet.
         val allInvoices  = db.invoiceDao().getAllInvoicesSync()
-        val allCustomers = db.customerDao().getAllCustomersSync()
+        val allCustomers = db.customerDao().getAllCustomersSync().map { customer ->
+            val stable = customer.withStableExternalId()
+            if (stable.externalId != customer.externalId) db.customerDao().updateCustomer(stable)
+            stable
+        }
         val allMelting   = db.meltingDao().getAllMeltingRecordsSync()
         val allRates     = db.goldRateDao().getRateHistory().first()   // no sync variant – flow is fine here
         val allPayments  = db.invoicePaymentDao().getAllPaymentsSync()
@@ -403,12 +408,13 @@ class DataSyncManager(
             val remoteKey = BackupMergeIdentity.customerKey(remoteCust)
             val localCust = localCustomersByKey[remoteKey]
             val localId = if (localCust == null) {
-                val inserted = db.customerDao().insertCustomer(remoteCust.copy(id = 0))
-                localCustomersByKey[remoteKey] = remoteCust.copy(id = inserted)
+                val restoredCustomer = remoteCust.copy(id = 0).withStableExternalId()
+                val inserted = db.customerDao().insertCustomer(restoredCustomer)
+                localCustomersByKey[remoteKey] = restoredCustomer.copy(id = inserted)
                 inserted
             } else {
                 if (remoteCust.updatedAt.after(localCust.updatedAt)) {
-                    val updated = remoteCust.copy(id = localCust.id)
+                    val updated = remoteCust.copy(id = localCust.id).withStableExternalId()
                     db.customerDao().updateCustomer(updated)
                     localCustomersByKey[remoteKey] = updated
                 }
@@ -518,8 +524,9 @@ class DataSyncManager(
         )
         val key = BackupMergeIdentity.customerKey(invoice)
         localCustomersByKey[key]?.let { return it.id }
-        val inserted = db.customerDao().insertCustomer(restored)
-        localCustomersByKey[key] = restored.copy(id = inserted)
+        val restoredWithId = restored.withStableExternalId()
+        val inserted = db.customerDao().insertCustomer(restoredWithId)
+        localCustomersByKey[key] = restoredWithId.copy(id = inserted)
         return inserted
     }
 

@@ -31,6 +31,46 @@ class SpreadsheetImportUtilTest {
     }
 
     @Test
+    fun `customer export includes hidden customer id but blank import template does not`() {
+        assertEquals(
+            listOf(
+                "customer_id",
+                "name",
+                "phone",
+                "shop_name",
+                "door_no",
+                "address",
+                "city",
+                "state",
+                "pincode",
+                "gst",
+                "email",
+                "dob",
+                "anniversary"
+            ),
+            SpreadsheetImportUtil.customerExportHeaderRows().first()
+        )
+
+        assertTrue("customer_id" !in SpreadsheetImportUtil.customerTemplateRows().first())
+    }
+
+    @Test
+    fun `customer import reads optional hidden customer id`() {
+        val parsed = SpreadsheetImportUtil.parseCustomers(
+            listOf(
+                mapOf(
+                    "customerid" to " asd-00001234 ",
+                    "name" to "Raja",
+                    "phone" to "9999999999",
+                    "shopname" to "Raja Jewels"
+                )
+            )
+        )
+
+        assertEquals("ASD-00001234", parsed.rows.first().customerId)
+    }
+
+    @Test
     fun `customer import combines split address fields and supports old address column`() {
         val parsed = SpreadsheetImportUtil.parseCustomers(
             listOf(
@@ -86,8 +126,8 @@ class SpreadsheetImportUtilTest {
     fun `generated customer export xlsx can be imported again`() {
         val bytes = SpreadsheetImportUtil.buildXlsx(
             listOf(
-                SpreadsheetImportUtil.customerTemplateRows().first(),
-                listOf("Raja", "9876543210", "Raja Jewels", "12 Market Street", "", "Chennai", "Tamil Nadu", "600001", "", "", "", "")
+                SpreadsheetImportUtil.customerExportHeaderRows().first(),
+                listOf("ASD-TEST-001", "Raja", "9876543210", "Raja Jewels", "12 Market Street", "", "Chennai", "Tamil Nadu", "600001", "", "", "", "")
             ),
             "Customers"
         )
@@ -96,6 +136,7 @@ class SpreadsheetImportUtilTest {
         val parsed = SpreadsheetImportUtil.parseCustomers(rows)
 
         assertEquals(1, parsed.rows.size)
+        assertEquals("ASD-TEST-001", parsed.rows.first().customerId)
         assertEquals("Raja", parsed.rows.first().name)
         assertEquals("9876543210", parsed.rows.first().phone)
         assertEquals("12 Market Street", parsed.rows.first().doorNo)
@@ -114,5 +155,26 @@ class SpreadsheetImportUtilTest {
         )
 
         assertEquals("9876543210", parsed.rows.first().phone)
+    }
+
+    @Test
+    fun `byte count display does not round small imports down to zero`() {
+        assertEquals("2.0 KB", SpreadsheetImportUtil.formatByteCount(2048))
+        assertEquals("512 B", SpreadsheetImportUtil.formatByteCount(512))
+    }
+
+    @Test
+    fun `google import validates sheet and drive links only`() {
+        assertEquals(
+            null,
+            SpreadsheetImportUtil.validateGoogleImportUrl("https://docs.google.com/spreadsheets/d/abc123/edit?gid=0")
+        )
+        assertEquals(
+            null,
+            SpreadsheetImportUtil.validateGoogleImportUrl("https://drive.google.com/file/d/file123/view?usp=sharing")
+        )
+
+        val error = SpreadsheetImportUtil.validateGoogleImportUrl("https://example.com/not-a-sheet")
+        assertTrue(error!!.contains("valid Google Sheet or Google Drive file link"))
     }
 }

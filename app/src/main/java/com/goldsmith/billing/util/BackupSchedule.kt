@@ -4,9 +4,8 @@ import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 object BackupSchedule {
-    // FIX: Changed from 1:00 AM to 1:15 AM as required
     const val DAILY_BACKUP_HOUR   = 1
-    const val DAILY_BACKUP_MINUTE = 15
+    const val DAILY_BACKUP_MINUTE = 0
 
     fun initialDelayToNextDailyBackup(nowMillis: Long = System.currentTimeMillis()): Long {
         val now  = Calendar.getInstance().apply { timeInMillis = nowMillis }

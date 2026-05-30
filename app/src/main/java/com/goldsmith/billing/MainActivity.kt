@@ -54,7 +54,10 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun unlock() { _lockApp.value = false }
+    fun unlock() {
+        _lockApp.value = false
+        resetInactivityTimer()
+    }
 }
 
 @AndroidEntryPoint
@@ -89,7 +92,11 @@ class MainActivity : FragmentActivity() {
             GoldsmithBillingTheme(darkTheme = settings.isDarkTheme) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val navController = rememberNavController()
-                    val startDest     = if (viewModel.isPinSet) Screen.PinVerify.route else Screen.PinSetup.route
+                    val startDest = when {
+                        viewModel.isPinSet -> Screen.PinVerify.route
+                        settings.userPrefix.isEmpty() -> Screen.Onboarding.route
+                        else -> Screen.PinSetup.route
+                    }
 
                     if (locked) {
                         LaunchedEffect(Unit) {
@@ -114,8 +121,20 @@ class MainActivity : FragmentActivity() {
 
     override fun onUserInteraction() { super.onUserInteraction(); viewModel.resetInactivityTimer() }
     override fun onResume()          { super.onResume();          viewModel.resetInactivityTimer() }
+    override fun onPause() {
+        super.onPause()
+        viewModel.resetInactivityTimer()
+    }
     override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
         viewModel.resetInactivityTimer()
         return super.dispatchTouchEvent(ev)
+    }
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        viewModel.resetInactivityTimer()
+        return super.dispatchKeyEvent(event)
+    }
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent?): Boolean {
+        viewModel.resetInactivityTimer()
+        return super.dispatchGenericMotionEvent(ev)
     }
 }

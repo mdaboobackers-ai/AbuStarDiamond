@@ -6,6 +6,8 @@ import java.util.Locale
 
 object BackupMergeIdentity {
     fun customerKey(customer: Customer): String {
+        val external = CustomerIdentity.normalizeExternalId(customer.externalId)
+        if (external.isNotBlank()) return "external|$external"
         val phone = phoneKey(customer.phone)
         val business = normalized(customer.companyName.ifBlank { customer.name })
         val owner = normalized(customer.name)

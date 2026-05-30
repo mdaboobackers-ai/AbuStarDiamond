@@ -7,7 +7,7 @@ import androidx.work.WorkerParameters
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.util.BackupFileConfig
 import com.goldsmith.billing.util.DataSyncManager
-import com.goldsmith.billing.util.LocalBackupStore
+import com.goldsmith.billing.util.DriveBackupConfig
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -39,9 +39,11 @@ class DailyBackupWorker @AssistedInject constructor(
                 return@withContext if (runAttemptCount < 3) Result.retry() else Result.failure()
             }
 
-            // Step 2: Try to upload to Google Drive (ASD folder) if account is signed in
+            // Step 2: Try to upload to Google Drive (ASD folder) only with the selected account
+            val selectedEmail = DriveBackupConfig.normalizeEmail(settings.selectedBackupEmail)
             val account = GoogleSignIn.getLastSignedInAccount(applicationContext)
-            if (account != null) {
+            val accountEmail = DriveBackupConfig.normalizeEmail(account?.email)
+            if (account != null && selectedEmail.isNotBlank() && accountEmail == selectedEmail) {
                 try {
                     val driveSync = DataSyncManager(applicationContext, account)
                     driveSync.uploadLocalBackupToDrive(localFile)

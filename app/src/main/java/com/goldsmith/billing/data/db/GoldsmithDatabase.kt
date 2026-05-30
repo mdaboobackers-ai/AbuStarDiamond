@@ -23,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CompanyProfile::class,
         InvoicePayment::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(DateConverter::class, ListConverter::class)
@@ -62,7 +62,7 @@ abstract class GoldsmithDatabase : RoomDatabase() {
                 DATABASE_NAME
             )
                 .openHelperFactory(factory)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
         }
 
@@ -114,6 +114,14 @@ abstract class GoldsmithDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `customers` ADD COLUMN `city` TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE `customers` ADD COLUMN `state` TEXT NOT NULL DEFAULT ''")
                 db.execSQL("ALTER TABLE `customers` ADD COLUMN `pincode` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `customers` ADD COLUMN `externalId` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("UPDATE `customers` SET `externalId` = 'ASD-' || upper(hex(randomblob(8))) WHERE `externalId` = ''")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_customers_externalId` ON `customers` (`externalId`)")
             }
         }
     }

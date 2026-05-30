@@ -46,22 +46,25 @@ object AppIconManager {
             ICON_DIAMOND to "$pkg.MainActivity.Diamond",
             ICON_CUSTOM  to "$pkg.MainActivity.Custom"
         )
+        val selectedAlias = aliases[iconType] ?: aliases.getValue(ICON_DEFAULT)
 
-        aliases.forEach { (type, alias) ->
-            val state = if (type == iconType)
-                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
-            else
-                PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-
+        fun setAlias(alias: String, state: Int) {
             try {
                 context.packageManager.setComponentEnabledSetting(
                     ComponentName(pkg, alias),
                     state,
-                    PackageManager.DONT_KILL_APP
+                    PackageManager.DONT_KILL_APP or PackageManager.SYNCHRONOUS
                 )
             } catch (_: Exception) {
                 // Alias may not exist in manifest - gracefully skip
             }
         }
+
+        // Enable the new launcher first so Android Launcher is never left without
+        // an enabled entry while switching back from a custom or alternate icon.
+        setAlias(selectedAlias, PackageManager.COMPONENT_ENABLED_STATE_ENABLED)
+        aliases.values
+            .filterNot { it == selectedAlias }
+            .forEach { setAlias(it, PackageManager.COMPONENT_ENABLED_STATE_DISABLED) }
     }
 }

@@ -26,6 +26,9 @@ interface CustomerDao {
     @Query("SELECT * FROM customers WHERE phone = :phone LIMIT 1")
     suspend fun getCustomerByPhone(phone: String): Customer?
 
+    @Query("SELECT * FROM customers WHERE externalId = :externalId LIMIT 1")
+    suspend fun getCustomerByExternalId(externalId: String): Customer?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCustomer(customer: Customer): Long
 

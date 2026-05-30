@@ -19,8 +19,8 @@ import java.util.Collections
 object DriveBackupConfig {
     const val REMOTE_FILE       = "goldsmith_sync_v3.enc"
     const val LEGACY_REMOTE_FILE = "goldsmith_sync_v2.json"
-    // FIX: Use DRIVE_FILE (visible) scope so we can create the "ASD" folder in Drive.
-    // DRIVE_APPDATA is hidden/private and cannot create named visible folders.
+    // DRIVE_FILE avoids restricted full-Drive consent and still lets the app
+    // create/reuse its ASD backup file after the user selects an account.
     const val SCOPE             = DriveScopes.DRIVE_FILE
     // ASD folder name as required by the client
     const val ASD_FOLDER_NAME   = "ASD"

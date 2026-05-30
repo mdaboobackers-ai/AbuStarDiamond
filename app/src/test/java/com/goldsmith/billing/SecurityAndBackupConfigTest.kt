@@ -34,12 +34,11 @@ class SecurityAndBackupConfigTest {
     }
 
     @Test
-    fun `drive backup uses hidden app data folder like app backups`() {
-        assertEquals("appDataFolder", DriveBackupConfig.SPACE)
-        assertEquals("appDataFolder", DriveBackupConfig.PARENT)
+    fun `drive backup uses ASD folder with Drive file scope`() {
+        assertEquals("https://www.googleapis.com/auth/drive.file", DriveBackupConfig.SCOPE)
+        assertEquals("ASD", DriveBackupConfig.ASD_FOLDER_NAME)
         assertEquals("goldsmith_sync_v3.enc", DriveBackupConfig.REMOTE_FILE)
-        assertTrue(DriveBackupConfig.FILE_QUERY.contains("appDataFolder"))
-        assertFalse(DriveBackupConfig.FILE_QUERY.contains("'root'"))
+        assertEquals("goldsmith_sync_v2.json", DriveBackupConfig.LEGACY_REMOTE_FILE)
     }
 
     @Test

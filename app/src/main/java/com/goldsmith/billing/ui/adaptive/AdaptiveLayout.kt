@@ -78,7 +78,7 @@ val appNavDestinations = listOf(
 
 /**
  * Drop-in replacement for Scaffold that adds:
- *  - BottomNavigationBar  on phones (COMPACT)
+ *  - Full-screen content on phones, with Dashboard as the navigation hub
  *  - NavigationRail       on medium screens / landscape tablets
  *  - NavigationDrawer     on large tablets / EXPANDED
  *
@@ -154,29 +154,11 @@ fun AdaptiveScaffold(
             }
         }
 
-        // ── COMPACT: BottomNavigationBar ───────────────────────────────────
+        // ── COMPACT: content only; Dashboard carries the modern phone navigation hub.
         else -> {
             Scaffold(
                 topBar               = topBar,
                 floatingActionButton = floatingActionButton,
-                bottomBar = {
-                    NavigationBar {
-                        appNavDestinations.forEach { dest ->
-                            NavigationBarItem(
-                                icon     = { Icon(dest.icon, contentDescription = dest.label) },
-                                label    = { Text(dest.label) },
-                                selected = currentDest == dest.route,
-                                onClick  = {
-                                    navController.navigate(dest.route) {
-                                        popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                        launchSingleTop = true
-                                        restoreState    = true
-                                    }
-                                }
-                            )
-                        }
-                    }
-                },
                 content = content
             )
         }

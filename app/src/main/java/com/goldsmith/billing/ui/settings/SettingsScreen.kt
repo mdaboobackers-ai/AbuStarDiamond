@@ -1,6 +1,7 @@
 package com.goldsmith.billing.ui.settings
 
 import android.app.Activity
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +41,7 @@ import com.goldsmith.billing.security.KeystoreManager
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
 import com.goldsmith.billing.util.AppIconManager
+import com.goldsmith.billing.util.CustomAppIconConverter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -79,12 +81,28 @@ class SettingsViewModel @Inject constructor(
     fun selectIcon(iconType: String) = viewModelScope.launch {
         settingsRepo.updateSelectedIcon(iconType)
     }
+    fun selectPackagedIcon(iconType: String) = viewModelScope.launch {
+        settingsRepo.updateSelectedIcon(iconType)
+        settingsRepo.updateCustomIconUri("")
+        clearProfileLogoIfItWasAppIcon()
+    }
     fun setCustomIconUri(uri: String) = viewModelScope.launch {
         settingsRepo.updateCustomIconUri(uri)
         settingsRepo.updateSelectedIcon(AppIconManager.ICON_CUSTOM)
+        clearProfileLogoIfItWasAppIcon(uri)
     }
     fun updateInactivityLock(secs: Int) = viewModelScope.launch {
         settingsRepo.updateInactivityLockSecs(secs)
+    }
+
+    private suspend fun clearProfileLogoIfItWasAppIcon(newIconUri: String = "") {
+        val profile = companyProfileDao.getProfileSync() ?: return
+        val logo = profile.logoUri
+        val isOldCustomAppIcon = logo.contains("custom_app_icon.png", ignoreCase = true) ||
+            (newIconUri.isNotBlank() && logo == newIconUri)
+        if (isOldCustomAppIcon) {
+            companyProfileDao.upsertProfile(profile.copy(logoUri = "", updatedAt = Date()))
+        }
     }
 }
 
@@ -103,14 +121,25 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
     var showBiometricConfirm by remember { mutableStateOf<Boolean?>(null) }
     var biometricEnabled by remember { mutableStateOf(viewModel.isBiometricEnabled()) }
     var showBackupInfo by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
-    // Gallery launcher for custom icon
+    // Gallery launcher for custom in-app logo preview. Android launcher icons must be packaged resources.
     val galleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
-            viewModel.setCustomIconUri(it.toString())
-            AppIconManager.switchIcon(context, AppIconManager.ICON_CUSTOM)
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            scope.launch {
+                val iconUri = runCatching { CustomAppIconConverter.saveSquareIcon(context, it) }
+                    .getOrElse { it.toString() }
+                viewModel.setCustomIconUri(iconUri)
+                AppIconManager.switchIcon(context, AppIconManager.ICON_CUSTOM)
+            }
         }
     }
 
@@ -165,7 +194,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                                 selected = settings.selectedIcon == AppIconManager.ICON_DEFAULT,
                                 modifier = Modifier.weight(1f),
                                 onClick = {
-                                    viewModel.selectIcon(AppIconManager.ICON_DEFAULT)
+                                    viewModel.selectPackagedIcon(AppIconManager.ICON_DEFAULT)
                                     AppIconManager.switchIcon(context, AppIconManager.ICON_DEFAULT)
                                 }
                             ) {
@@ -183,7 +212,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                                 selected = settings.selectedIcon == AppIconManager.ICON_DIAMOND,
                                 modifier = Modifier.weight(1f),
                                 onClick = {
-                                    viewModel.selectIcon(AppIconManager.ICON_DIAMOND)
+                                    viewModel.selectPackagedIcon(AppIconManager.ICON_DIAMOND)
                                     AppIconManager.switchIcon(context, AppIconManager.ICON_DIAMOND)
                                 }
                             ) {
@@ -215,7 +244,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                                 label = "Custom\nImage",
                                 selected = settings.selectedIcon == AppIconManager.ICON_CUSTOM,
                                 modifier = Modifier.weight(1f),
-                                onClick = { galleryLauncher.launch("image/*") }
+                                onClick = { galleryLauncher.launch(arrayOf("image/*")) }
                             ) {
                                 Box(
                                     Modifier
@@ -275,7 +304,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                "Icon change takes effect after relaunching the app",
+                                "Custom icon image is saved separately. Business logo is managed in Company Profile.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AuraColors.OnSurfaceVariant.copy(alpha = 0.4f),
                                 fontSize = 10.sp
@@ -894,8 +923,17 @@ private fun CompanyProfileDialog(
     var pin by remember { mutableStateOf(current?.pincode ?: "") }
     var gst by remember { mutableStateOf(current?.gstNumber ?: "") }
     var logoUri by remember { mutableStateOf(current?.logoUri ?: "") }
-    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        uri?.let { logoUri = it.toString() }
+    val context = LocalContext.current
+    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            logoUri = it.toString()
+        }
     }
 
     AlertDialog(
@@ -932,10 +970,15 @@ private fun CompanyProfileDialog(
                             )
                         }
                     }
-                    OutlinedButton(onClick = { logoPicker.launch("image/*") }) {
-                        Icon(Icons.Default.AddPhotoAlternate, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(stringResource(R.string.change_logo))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { logoPicker.launch(arrayOf("image/*")) }) {
+                            Icon(Icons.Default.AddPhotoAlternate, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.change_logo))
+                        }
+                        TextButton(onClick = { logoUri = "" }, enabled = logoUri.isNotBlank()) {
+                            Text("Reset logo", color = AuraColors.OnSurfaceVariant)
+                        }
                     }
                 }
                 GhostTextField(name, { name = it }, stringResource(R.string.company_name))

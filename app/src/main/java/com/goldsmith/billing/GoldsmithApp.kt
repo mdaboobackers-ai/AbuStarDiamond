@@ -6,8 +6,10 @@ import androidx.work.*
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.util.BackupSchedule
 import com.goldsmith.billing.util.LocalBackupStore
+import com.goldsmith.billing.util.RateRefreshSchedule
 import com.goldsmith.billing.worker.BirthdayAlertWorker
 import com.goldsmith.billing.worker.DailyBackupWorker
+import com.goldsmith.billing.worker.GoldRateRefreshWorker
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.collect
@@ -32,6 +34,7 @@ class GoldsmithApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         BirthdayAlertWorker.schedule(this)
+        scheduleGoldRateRefreshes()
         
         MainScope().launch {
             settingsRepo.settingsFlow.collect { settings ->
@@ -74,7 +77,7 @@ class GoldsmithApp : Application(), Configuration.Provider {
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "goldsmith_daily_backup",
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             backupRequest
         )
     }
@@ -96,5 +99,31 @@ class GoldsmithApp : Application(), Configuration.Provider {
 
     private fun cancelDailyBackup() {
         WorkManager.getInstance(this).cancelUniqueWork("goldsmith_daily_backup")
+    }
+
+    private fun scheduleGoldRateRefreshes() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        RateRefreshSchedule.DAILY_SLOTS.forEach { slot ->
+            val request = PeriodicWorkRequestBuilder<GoldRateRefreshWorker>(
+                repeatInterval = 24,
+                repeatIntervalTimeUnit = TimeUnit.HOURS,
+                flexTimeInterval = 15,
+                flexTimeIntervalUnit = TimeUnit.MINUTES
+            )
+                .setConstraints(constraints)
+                .setInitialDelay(RateRefreshSchedule.initialDelayToNext(slot), TimeUnit.MILLISECONDS)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
+                .addTag("gold_rate_refresh")
+                .build()
+
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                slot.workName,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request
+            )
+        }
     }
 }

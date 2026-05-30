@@ -31,6 +31,7 @@ import com.goldsmith.billing.data.model.PaymentStatus
 import com.goldsmith.billing.data.repository.SettingsRepository
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.CustomerIdentity.withStableExternalId
 import com.goldsmith.billing.util.GoldCalc
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview
@@ -93,12 +94,12 @@ class CustomerViewModel @Inject constructor(
     fun setQuery(q: String) { _query.value = q }
 
     fun saveCustomer(customer: Customer, onDone: (Long) -> Unit) = viewModelScope.launch {
-        val id = customerDao.insertCustomer(customer)
+        val id = customerDao.insertCustomer(customer.withStableExternalId())
         onDone(id)
     }
 
     fun updateCustomer(customer: Customer) = viewModelScope.launch {
-        customerDao.updateCustomer(customer)
+        customerDao.updateCustomer(customer.withStableExternalId())
     }
 
     fun deleteCustomer(customer: Customer) = viewModelScope.launch {

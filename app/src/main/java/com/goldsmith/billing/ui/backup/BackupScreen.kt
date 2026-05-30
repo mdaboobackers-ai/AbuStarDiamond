@@ -5,17 +5,61 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.FactCheck
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,147 +69,156 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.Scope
+import com.goldsmith.billing.data.repository.AppSettings
 import com.goldsmith.billing.data.repository.SettingsRepository
+import com.goldsmith.billing.ui.adaptive.WindowSize
 import com.goldsmith.billing.ui.components.GlassCard
 import com.goldsmith.billing.ui.components.GoldButton
 import com.goldsmith.billing.ui.theme.AuraColors
-import com.goldsmith.billing.util.BackupFileConfig
 import com.goldsmith.billing.util.BackupCounts
+import com.goldsmith.billing.util.BackupFileConfig
 import com.goldsmith.billing.util.DataSyncManager
 import com.goldsmith.billing.util.DriveBackupConfig
+import com.goldsmith.billing.util.GoogleDriveAuth
+import com.goldsmith.billing.util.GoogleDriveHelper
 import com.goldsmith.billing.util.LocalBackupStore
+import com.goldsmith.billing.util.AndroidSigningInfo
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.io.File
 import javax.inject.Inject
 
 sealed class BackupState {
     object Idle : BackupState()
-    data class Running(val label: String) : BackupState()
+    data class Running(val title: String, val detail: String, val progress: Float) : BackupState()
     data class Success(
-        val message: String,
+        val title: String,
+        val detail: String,
         val timestamp: Long = System.currentTimeMillis(),
         val counts: BackupCounts? = null
     ) : BackupState()
-    data class Error(val message: String) : BackupState()
+    data class Error(val title: String, val detail: String) : BackupState()
 }
 
 @HiltViewModel
 class BackupViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
-    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context
+    @ApplicationContext private val context: android.content.Context
 ) : ViewModel() {
-
     val settings = settingsRepo.settingsFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000),
-            com.goldsmith.billing.data.repository.AppSettings())
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())
 
     private val _backupState = MutableStateFlow<BackupState>(BackupState.Idle)
     val backupState = _backupState.asStateFlow()
 
-    // ── Local + Drive backup (WhatsApp style) ──────────────────────────────
-    fun saveLocalAndUploadToDrive(account: GoogleSignInAccount) = viewModelScope.launch {
-        _backupState.value = BackupState.Running("Saving local backup…")
-        val manager = DataSyncManager(context, account)
+    fun connectDriveAccount(account: GoogleSignInAccount) = viewModelScope.launch {
+        val email = account.email.orEmpty()
+        settingsRepo.updateSelectedBackupEmail(email)
+        _backupState.value = BackupState.Running(
+            "Connecting Google Drive",
+            "Checking the ASD folder for $email",
+            0.35f
+        )
+        val helper = GoogleDriveHelper(context, account)
+        val latest = runCatching { helper.latestBackupModifiedTime() }.getOrNull()
+        _backupState.value = BackupState.Success(
+            "Google account ready",
+            if (latest != null) {
+                "Using $email. Found an existing ASD backup folder."
+            } else {
+                "Using $email. ASD folder is ready for the first backup."
+            }
+        )
+    }
 
-        // Step 1: Always create local file first
-        val file = manager.createLocalBackupFile()
-        if (file == null) {
-            _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Local backup failed")
+    fun saveLocalAndUploadToDrive(account: GoogleSignInAccount) = viewModelScope.launch {
+        val email = account.email.orEmpty()
+        settingsRepo.updateSelectedBackupEmail(email)
+        settingsRepo.updateLastBackupAccountEmail(email)
+
+        _backupState.value = BackupState.Running(
+            "Creating backup",
+            "Creating encrypted local backup file",
+            0.25f
+        )
+        val manager = DataSyncManager(context, account)
+        val localFile = manager.createLocalBackupFile()
+        if (localFile == null) {
+            _backupState.value = BackupState.Error("Backup failed", manager.lastErrorMessage ?: "Local backup failed")
             return@launch
         }
 
-        // Step 2: Upload same file to Drive ASD folder
-        _backupState.value = BackupState.Running("Uploading to Google Drive (ASD folder)…")
-        val uploaded = manager.uploadLocalBackupToDrive(file)
-
-        val accountDisplay = account.email.orEmpty()
-        settingsRepo.updateLastBackupAccountEmail(accountDisplay)
-        settingsRepo.updateLastBackupTime(System.currentTimeMillis())
+        _backupState.value = BackupState.Running(
+            "Uploading backup",
+            "Uploading ${localFile.name} to Google Drive > ASD",
+            0.72f
+        )
+        val uploaded = manager.uploadLocalBackupToDrive(localFile)
+        val now = System.currentTimeMillis()
+        settingsRepo.updateLastBackupTime(now)
 
         _backupState.value = if (uploaded) {
             BackupState.Success(
-                "Local backup saved + uploaded to Drive\nAccount: $accountDisplay",
+                "Backup completed",
+                "Saved locally and uploaded to Google Drive as ${DriveBackupConfig.REMOTE_FILE}",
                 counts = manager.lastBackupCounts
             )
         } else {
-            // Local succeeded even if Drive failed
             BackupState.Success(
-                "Local backup saved (Drive upload failed — will retry next auto-backup)\nAccount: $accountDisplay",
+                "Local backup completed",
+                manager.lastErrorMessage ?: "Saved locally. Google Drive upload can retry later.",
                 counts = manager.lastBackupCounts
             )
         }
     }
 
-    fun saveLocalBackup() = viewModelScope.launch {
-        _backupState.value = BackupState.Running("Saving local backup…")
-        val manager = DataSyncManager(context)
-        val file = manager.createLocalBackupFile()
-        if (file != null) {
-            settingsRepo.updateLastBackupTime(System.currentTimeMillis())
-            _backupState.value = BackupState.Success(
-                "Local backup saved: ${file.name}", counts = manager.lastBackupCounts
-            )
-        } else {
-            _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Local backup failed")
-        }
-    }
-
-    fun saveBackup(uri: Uri) = viewModelScope.launch {
-        _backupState.value = BackupState.Running("Saving backup")
-        val manager = DataSyncManager(context)
-        val now = System.currentTimeMillis()
-        val success = manager.exportBackupToUri(uri, now)
-        if (success) {
-            context.persistBackupUri(uri, write = true)
-            settingsRepo.updateBackupDocumentUri(uri.toString())
-            settingsRepo.updateLastBackupTime(now)
-            _backupState.value = BackupState.Success("Backup saved safely", counts = manager.lastBackupCounts)
-        } else {
-            _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Backup failed")
-        }
-    }
-
-    // Restore from Drive on new install
     fun restoreFromDrive(account: GoogleSignInAccount) = viewModelScope.launch {
-        _backupState.value = BackupState.Running("Looking for backup in Google Drive (ASD folder)…")
+        val email = account.email.orEmpty()
+        settingsRepo.updateSelectedBackupEmail(email)
+        settingsRepo.updateLastRestoreAccountEmail(email)
+
+        _backupState.value = BackupState.Running(
+            "Opening Drive backup",
+            "Checking Google Drive > ASD for the latest backup",
+            0.30f
+        )
         val manager = DataSyncManager(context, account)
+
+        _backupState.value = BackupState.Running(
+            "Restoring data",
+            "Downloading and merging the encrypted backup",
+            0.70f
+        )
         val success = manager.performRestore()
-        val accountDisplay = account.email.orEmpty()
-        settingsRepo.updateLastRestoreAccountEmail(accountDisplay)
         _backupState.value = if (success) {
             BackupState.Success(
-                "Data restored from Drive\nAccount: $accountDisplay",
+                "Restore completed",
+                "Data restored from $email",
                 counts = manager.lastBackupCounts
             )
         } else {
-            BackupState.Error(manager.lastErrorMessage ?: "No backup found in Drive for this account")
+            BackupState.Error("Restore failed", manager.lastErrorMessage ?: "No backup found in Google Drive > ASD")
         }
     }
 
     fun mergeBackup(uri: Uri) = viewModelScope.launch {
-        _backupState.value = BackupState.Running("Merging backup")
+        _backupState.value = BackupState.Running("Restoring file", "Reading selected backup file", 0.45f)
         val manager = DataSyncManager(context)
         val success = manager.mergeBackupFromUri(uri)
-        if (success) {
-            context.persistBackupUri(uri, write = false)
-            settingsRepo.updateLastRestoreAccountEmail("File restore")
-            _backupState.value = BackupState.Success(
-                "Backup merged with this device", counts = manager.lastBackupCounts
-            )
+        _backupState.value = if (success) {
+            BackupState.Success("File restore completed", "Backup merged with this device", counts = manager.lastBackupCounts)
         } else {
-            _backupState.value = BackupState.Error(manager.lastErrorMessage ?: "Restore failed")
+            BackupState.Error("File restore failed", manager.lastErrorMessage ?: "Restore failed")
         }
     }
 
@@ -175,425 +228,475 @@ class BackupViewModel @Inject constructor(
 
     fun testLatestAutoBackup(file: File?) = viewModelScope.launch {
         if (file == null) {
-            _backupState.value = BackupState.Error("No auto backup file found yet")
+            _backupState.value = BackupState.Error("No local backup", "Create a backup first.")
             return@launch
         }
-        _backupState.value = BackupState.Running("Testing backup")
+        _backupState.value = BackupState.Running("Testing backup", "Decrypting latest local backup", 0.55f)
         val manager = DataSyncManager(context)
         val valid = manager.validateBackupFile(file)
-        _backupState.value = if (valid)
-            BackupState.Success("Test restore passed. Backup file is readable")
-        else
-            BackupState.Error(manager.lastErrorMessage ?: "Backup test failed")
+        _backupState.value = if (valid) {
+            BackupState.Success("Backup test passed", "Latest local backup is readable.")
+        } else {
+            BackupState.Error("Backup test failed", manager.lastErrorMessage ?: "Backup file could not be read.")
+        }
     }
 
-    fun resetState() { _backupState.value = BackupState.Idle }
+    fun resetState() {
+        _backupState.value = BackupState.Idle
+    }
+
+    fun accountSelectionFailed(detail: String? = null) {
+        val sha1 = AndroidSigningInfo.sha1(context)
+        val configHint = "Google Cloud Android OAuth needed: package ${context.packageName}" +
+            if (sha1.isNotBlank()) ", SHA-1 $sha1." else "."
+        _backupState.value = BackupState.Error(
+            "Google account not selected",
+            listOfNotNull(
+                detail ?: "The Google account picker did not return an account. Check Google Play Services and try Select account again.",
+                configHint
+            ).joinToString("\n")
+        )
+    }
+
+    fun drivePermissionMissing() {
+        _backupState.value = BackupState.Error(
+            "Drive permission needed",
+            "Please allow Google Drive backup access for the selected account."
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BackupScreen(
     onBack: () -> Unit,
+    windowSize: WindowSize = WindowSize.COMPACT,
     viewModel: BackupViewModel = hiltViewModel()
 ) {
-    val context      = LocalContext.current
-    val settings     by viewModel.settings.collectAsState()
-    val backupState  by viewModel.backupState.collectAsState()
-    val sdf          = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
-    var latestAuto   by remember { mutableStateOf(LocalBackupStore.latestBackupFile(context)) }
-    fun refreshAuto() { latestAuto = LocalBackupStore.latestBackupFile(context) }
+    val context = LocalContext.current
+    val settings by viewModel.settings.collectAsState()
+    val state by viewModel.backupState.collectAsState()
+    val sdf = remember { SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()) }
+    var latestLocal by remember { mutableStateOf(LocalBackupStore.latestBackupFile(context)) }
+    var pendingAction by remember { mutableStateOf<DriveAction?>(null) }
+
+    fun refreshLocal() {
+        latestLocal = LocalBackupStore.latestBackupFile(context)
+    }
+
+    LaunchedEffect(state) {
+        if (state is BackupState.Success) refreshLocal()
+    }
 
     BackHandler { onBack() }
 
-    val createBackupLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument(BackupFileConfig.MIME_TYPE)
-    ) { uri -> if (uri != null) viewModel.saveBackup(uri) else viewModel.resetState(); refreshAuto() }
-
     val openBackupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { uri -> if (uri != null) viewModel.mergeBackup(uri) else viewModel.resetState() }
+    ) { uri ->
+        if (uri != null) viewModel.mergeBackup(uri) else viewModel.resetState()
+    }
 
-    fun driveSignInOptions(forRestore: Boolean) = GoogleSignInOptions
-        .Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-        .requestEmail()
-        .requestScopes(Scope(DriveBackupConfig.SCOPE))
-        .build()
+    val accountClient = remember { GoogleSignIn.getClient(context, GoogleDriveAuth.accountSignInOptions()) }
+    val driveClient = remember { GoogleSignIn.getClient(context, GoogleDriveAuth.driveSignInOptions()) }
 
-    fun driveClient(forRestore: Boolean) =
-        GoogleSignIn.getClient(context, driveSignInOptions(forRestore))
+    fun perform(action: DriveAction, account: GoogleSignInAccount) {
+        when (action) {
+            DriveAction.Connect -> viewModel.connectDriveAccount(account)
+            DriveAction.Backup -> viewModel.saveLocalAndUploadToDrive(account)
+            DriveAction.Restore -> viewModel.restoreFromDrive(account)
+        }
+    }
 
-    var pendingAction by remember { mutableStateOf<String?>(null) } // "backup" | "restore"
-
-    val driveSignInLauncher = rememberLauncherForActivityResult(
+    val drivePermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val account = runCatching {
-            GoogleSignIn.getSignedInAccountFromIntent(result.data).result
-        }.getOrNull()
-        if (account != null) {
-            when (pendingAction) {
-                "backup"  -> { viewModel.saveLocalAndUploadToDrive(account); refreshAuto() }
-                "restore" -> viewModel.restoreFromDrive(account)
-            }
+        val account = GoogleDriveAuth.accountFromIntent(result.data)
+        val action = pendingAction
+        if (account == null) {
+            viewModel.accountSelectionFailed(GoogleDriveAuth.failureMessageFromIntent(result.data))
+        } else if (action != null && GoogleDriveAuth.hasDrivePermission(account)) {
+            perform(action, account)
         } else {
-            viewModel.resetState()
+            viewModel.drivePermissionMissing()
         }
         pendingAction = null
     }
 
-    fun launchDrive(action: String) {
-        pendingAction = action
-        val account = GoogleSignIn.getLastSignedInAccount(context)
-        if (account != null && GoogleSignIn.hasPermissions(account, Scope(DriveBackupConfig.SCOPE))) {
-            when (action) {
-                "backup"  -> { viewModel.saveLocalAndUploadToDrive(account); refreshAuto() }
-                "restore" -> viewModel.restoreFromDrive(account)
-            }
+    fun continueWithAccount(action: DriveAction, account: GoogleSignInAccount) {
+        if (GoogleDriveAuth.hasDrivePermission(account)) {
+            perform(action, account)
+            pendingAction = null
         } else {
-            driveSignInLauncher.launch(driveClient(action == "restore").signInIntent)
+            drivePermissionLauncher.launch(driveClient.signInIntent)
         }
     }
 
-    val autoBackupPath = remember { LocalBackupStore.backupDir(context).absolutePath }
-    // Show the currently linked Drive account email
-    val driveAccountEmail = settings.lastBackupAccountEmail.ifBlank {
-        GoogleSignIn.getLastSignedInAccount(context)?.email.orEmpty()
+    val accountSignInLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val account = GoogleDriveAuth.accountFromIntent(result.data)
+        val action = pendingAction
+        if (account != null && action != null) {
+            continueWithAccount(action, account)
+        } else {
+            viewModel.accountSelectionFailed(GoogleDriveAuth.failureMessageFromIntent(result.data))
+            pendingAction = null
+        }
     }
+
+    fun runDriveAction(action: DriveAction, forcePicker: Boolean = false) {
+        pendingAction = action
+        val selectedEmail = DriveBackupConfig.normalizeEmail(settings.selectedBackupEmail)
+        val cached = GoogleSignIn.getLastSignedInAccount(context)
+        val requiresSavedAccount = action != DriveAction.Connect
+        val hasSavedAccount = selectedEmail.isNotBlank()
+        val canUseCached = GoogleDriveAuth.accountEmailMatches(cached, selectedEmail) &&
+            (!requiresSavedAccount || hasSavedAccount) &&
+            !forcePicker
+
+        if (canUseCached) {
+            continueWithAccount(action, cached!!)
+            return
+        }
+
+        val silentTask = driveClient.silentSignIn()
+        if (!forcePicker && silentTask.isSuccessful) {
+            val account = silentTask.result
+            if (GoogleDriveAuth.accountEmailMatches(account, selectedEmail) && (!requiresSavedAccount || hasSavedAccount)) {
+                continueWithAccount(action, account!!)
+                return
+            }
+        }
+
+        silentTask.addOnCompleteListener { task ->
+            val account = runCatching { task.result }.getOrNull()
+            val canUseSilent = task.isSuccessful &&
+                GoogleDriveAuth.accountEmailMatches(account, selectedEmail) &&
+                (!requiresSavedAccount || hasSavedAccount) &&
+                !forcePicker
+            if (canUseSilent) {
+                continueWithAccount(action, account!!)
+            } else {
+                if (forcePicker) {
+                    accountClient.signOut().addOnCompleteListener {
+                        accountSignInLauncher.launch(accountClient.signInIntent)
+                    }
+                } else {
+                    accountSignInLauncher.launch(accountClient.signInIntent)
+                }
+            }
+        }
+    }
+
+    val activeEmail = settings.selectedBackupEmail
+    val maxWidth = if (windowSize == WindowSize.COMPACT) Modifier.fillMaxWidth() else Modifier.widthIn(max = 820.dp).fillMaxWidth()
 
     Scaffold(
         containerColor = AuraColors.Background,
         topBar = {
             TopAppBar(
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Icon(Icons.Default.AdminPanelSettings, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(20.dp))
-                        Text("BACKUP VAULT", style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, fontSize = 14.sp, letterSpacing = 3.sp)
-                    }
+                    Text("BACKUP & RESTORE", style = MaterialTheme.typography.labelSmall, letterSpacing = 2.sp)
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = AuraColors.PrimaryContainer) }
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = AuraColors.PrimaryContainer)
+                    }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = AuraColors.SurfaceContainerLowest.copy(alpha = 0.9f))
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = AuraColors.SurfaceContainerLowest.copy(alpha = 0.92f))
             )
         }
     ) { padding ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-
-            // ── Hero status card ──────────────────────────────────────────
-            item {
-                BackupHeroCard(state = backupState, lastBackup = settings.lastBackupTime,
-                    driveEmail = driveAccountEmail, sdf = sdf)
+        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+            LazyColumn(
+                modifier = maxWidth,
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                item { BackupStatusCard(state, settings, activeEmail, latestLocal, sdf) }
+                item {
+                    AccountCard(
+                        email = activeEmail,
+                        enabled = state !is BackupState.Running,
+                        onConnect = { runDriveAction(DriveAction.Connect) },
+                        onChange = { runDriveAction(DriveAction.Connect, forcePicker = true) }
+                    )
+                }
+                item {
+                    ActionCard(
+                        title = "Create backup",
+                        subtitle = "Creates an encrypted local backup, then uploads it to Google Drive > ASD using the selected account.",
+                        primaryText = "Backup now",
+                        icon = Icons.Default.CloudUpload,
+                        enabled = state !is BackupState.Running,
+                        onPrimary = { runDriveAction(DriveAction.Backup) }
+                    )
+                }
+                item {
+                    ActionCard(
+                        title = "Restore backup",
+                        subtitle = "Opens Google Drive > ASD for the selected account and restores the encrypted backup file.",
+                        primaryText = "Restore from Drive",
+                        icon = Icons.Default.CloudDownload,
+                        enabled = state !is BackupState.Running,
+                        onPrimary = { runDriveAction(DriveAction.Restore) },
+                        secondaryText = "Restore from file",
+                        secondaryIcon = Icons.Default.FolderOpen,
+                        onSecondary = { openBackupLauncher.launch(arrayOf(BackupFileConfig.MIME_TYPE, "application/json", "*/*")) }
+                    )
+                }
+                item {
+                    ScheduleCard(
+                        enabled = settings.autoBackupEnabled,
+                        localPath = LocalBackupStore.backupDir(context).absolutePath,
+                        latest = latestLocal,
+                        onEnabledChange = viewModel::setAutoBackup,
+                        onTest = { viewModel.testLatestAutoBackup(latestLocal) },
+                        onRefresh = ::refreshLocal
+                    )
+                }
+                item { Spacer(Modifier.height(36.dp)) }
             }
+        }
+    }
+}
 
-            // ── Save Backup section ───────────────────────────────────────
-            item {
-                GlassCard(Modifier.fillMaxWidth(), goldBorder = true) {
-                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(
-                            icon = Icons.Default.Save,
-                            title = "Save Backup",
-                            subtitle = "Like WhatsApp: saves an encrypted file on your phone AND uploads to your Google Drive (ASD folder)."
-                        )
-                        // Primary: local + drive together
-                        GoldButton(
-                            text = if (backupState is BackupState.Running) "Working…" else "Backup Now (Local + Drive)",
-                            onClick = { launchDrive("backup") },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = backupState !is BackupState.Running,
-                            icon = { Icon(Icons.Default.CloudUpload, null, modifier = Modifier.size(18.dp)) }
-                        )
-                        // Secondary: local only
-                        OutlinedButton(
-                            onClick = { viewModel.saveLocalBackup(); refreshAuto() },
-                            modifier = Modifier.fillMaxWidth().height(46.dp),
-                            enabled = backupState !is BackupState.Running,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
-                            border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.4f)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.PhoneAndroid, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("LOCAL ONLY", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+private enum class DriveAction { Connect, Backup, Restore }
+
+@Composable
+private fun BackupStatusCard(
+    state: BackupState,
+    settings: AppSettings,
+    email: String,
+    latestLocal: File?,
+    sdf: SimpleDateFormat
+) {
+    GlassCard(Modifier.fillMaxWidth(), elevated = true, goldBorder = state is BackupState.Success) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Data vault", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                    Text(
+                        when (state) {
+                            BackupState.Idle -> if (settings.lastBackupTime > 0) {
+                                "Last backup ${sdf.format(Date(settings.lastBackupTime))}"
+                            } else {
+                                "No backup created yet"
+                            }
+                            is BackupState.Running -> state.title
+                            is BackupState.Success -> state.title
+                            is BackupState.Error -> state.title
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = when (state) {
+                            is BackupState.Error -> AuraColors.Error
+                            is BackupState.Success -> AuraColors.Primary
+                            else -> AuraColors.OnSurfaceVariant
                         }
-                        // Show linked account
-                        if (driveAccountEmail.isNotBlank()) {
-                            DriveAccountPill(email = driveAccountEmail)
-                        }
-                    }
+                    )
                 }
+                StatusIcon(state)
             }
-
-            // ── Restore section ───────────────────────────────────────────
-            item {
-                GlassCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionHeader(
-                            icon = Icons.Default.CloudDownload,
-                            title = "Restore from Google Drive",
-                            subtitle = "On a new phone: sign in with your Google account and tap Restore. All data in the ASD folder will be recovered."
-                        )
-                        GoldButton(
-                            text = "Restore from Drive",
-                            onClick = { launchDrive("restore") },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = backupState !is BackupState.Running,
-                            icon = { Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(18.dp)) }
-                        )
-                        OutlinedButton(
-                            onClick = { openBackupLauncher.launch(arrayOf(BackupFileConfig.MIME_TYPE, "application/json", "*/*")) },
-                            modifier = Modifier.fillMaxWidth().height(46.dp),
-                            enabled = backupState !is BackupState.Running,
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
-                            border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.4f)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.FolderOpen, null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("RESTORE FROM FILE", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
-                        }
+            if (state is BackupState.Running) {
+                LinearProgressIndicator(
+                    progress = { state.progress },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = AuraColors.PrimaryContainer,
+                    trackColor = AuraColors.GlassWhite10
+                )
+            }
+            Text(
+                when (state) {
+                    BackupState.Idle -> buildString {
+                        append(if (email.isBlank()) "Select Google account before backup or restore." else "Selected account: $email")
+                        latestLocal?.let { append("\nLatest local: ${it.name}") }
                     }
-                }
-            }
-
-            // ── Auto backup & health ──────────────────────────────────────
-            item {
-                GlassCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween) {
-                            SectionHeader(
-                                icon = Icons.Default.Schedule,
-                                title = "Auto Backup",
-                                subtitle = "Runs every day at 1:15 AM. Saves local + uploads to Drive if signed in."
-                            )
-                            Switch(
-                                checked = settings.autoBackupEnabled,
-                                onCheckedChange = viewModel::setAutoBackup,
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor  = AuraColors.OnPrimary,
-                                    checkedTrackColor  = AuraColors.PrimaryContainer,
-                                    uncheckedThumbColor = AuraColors.OnSurfaceVariant,
-                                    uncheckedTrackColor = AuraColors.SurfaceContainerHighest
-                                )
-                            )
-                        }
-                        BackupLocationPill("Local folder: $autoBackupPath")
-                        BackupHealthPanel(
-                            latestFile = latestAuto,
-                            onTestRestore = { viewModel.testLatestAutoBackup(latestAuto) },
-                            onRefresh = ::refreshAuto,
-                            enabled = backupState !is BackupState.Running
-                        )
+                    is BackupState.Running -> state.detail
+                    is BackupState.Success -> buildString {
+                        append(state.detail)
+                        state.counts?.let { append("\n${it.summary()}") }
                     }
-                }
-            }
-
-            // ── Drive protection note ─────────────────────────────────────
-            item {
-                GlassCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SectionHeader(
-                            icon = Icons.Default.Security,
-                            title = "Drive Folder Protection",
-                            subtitle = "Backup files are stored in a folder called ASD inside your Google Drive. " +
-                                "To prevent accidental deletion, open Google Drive → ASD folder → ⋮ → " +
-                                "Add to Starred. Starred folders are harder to accidentally delete."
-                        )
-                        FlowStep("1", "Open Google Drive on your phone or browser.")
-                        FlowStep("2", "Find the folder named ASD.")
-                        FlowStep("3", "Long-press or tap ⋮ → Star it to protect from accidental delete.")
-                        FlowStep("4", "Backup files inside are encrypted — unreadable without the app PIN.")
-                    }
-                }
-            }
-
-            // ── Family sync note ──────────────────────────────────────────
-            item {
-                GlassCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        SectionHeader(
-                            icon = Icons.Default.Groups,
-                            title = "Family Device Sync",
-                            subtitle = "Each family member uses their own Gmail. Here is the recommended sync flow."
-                        )
-                        FlowStep("1", "Each device bills offline with its own prefix (F, Y, B).")
-                        FlowStep("2", "One member backs up to their Drive (ASD folder).")
-                        FlowStep("3", "Other members download that backup file from WhatsApp/email and tap 'Restore from File'.")
-                        FlowStep("4", "All invoices merge safely — no duplicates, no data loss.")
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "💡 Tip: Share the backup file (.asdb) via WhatsApp to family members whenever you want to sync. They tap 'Restore from File' and their data updates instantly.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = AuraColors.PrimaryContainer.copy(alpha = 0.85f)
-                        )
-                    }
-                }
-            }
-
-            item { Spacer(Modifier.height(40.dp)) }
+                    is BackupState.Error -> state.detail
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = AuraColors.OnSurfaceVariant
+            )
         }
     }
 }
 
 @Composable
-private fun DriveAccountPill(email: String) {
+private fun StatusIcon(state: BackupState) {
+    Box(
+        Modifier.size(52.dp)
+            .background(AuraColors.GlassWhite5, RoundedCornerShape(16.dp))
+            .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(16.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        when (state) {
+            is BackupState.Running -> CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = AuraColors.PrimaryContainer)
+            is BackupState.Success -> Icon(Icons.Default.CheckCircle, null, tint = AuraColors.Primary, modifier = Modifier.size(28.dp))
+            is BackupState.Error -> Icon(Icons.Default.Error, null, tint = AuraColors.Error, modifier = Modifier.size(28.dp))
+            BackupState.Idle -> Icon(Icons.Default.Security, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(28.dp))
+        }
+    }
+}
+
+@Composable
+private fun AccountCard(email: String, enabled: Boolean, onConnect: () -> Unit, onChange: () -> Unit) {
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Icon(Icons.Default.AccountCircle, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(28.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Google Drive account", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                    Text(if (email.isBlank()) "No account selected" else email, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                GoldButton(
+                    text = if (email.isBlank()) "Select account" else "Check account",
+                    onClick = onConnect,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                    icon = { Icon(Icons.Default.DriveFileMove, null, modifier = Modifier.size(18.dp)) }
+                )
+                OutlinedButton(
+                    onClick = onChange,
+                    enabled = enabled,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
+                    modifier = Modifier.height(52.dp)
+                ) {
+                    Text("Change", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActionCard(
+    title: String,
+    subtitle: String,
+    primaryText: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean,
+    onPrimary: () -> Unit,
+    secondaryText: String? = null,
+    secondaryIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    onSecondary: (() -> Unit)? = null
+) {
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.size(42.dp).background(AuraColors.GlassWhite5, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
+                    Icon(icon, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(22.dp))
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                    Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                }
+            }
+            GoldButton(primaryText, onClick = onPrimary, enabled = enabled, modifier = Modifier.fillMaxWidth(), icon = { Icon(icon, null, modifier = Modifier.size(18.dp)) })
+            if (secondaryText != null && onSecondary != null && secondaryIcon != null) {
+                OutlinedButton(
+                    onClick = onSecondary,
+                    enabled = enabled,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.35f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer)
+                ) {
+                    Icon(secondaryIcon, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(secondaryText.uppercase(), style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScheduleCard(
+    enabled: Boolean,
+    localPath: String,
+    latest: File?,
+    onEnabledChange: (Boolean) -> Unit,
+    onTest: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    GlassCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Icon(Icons.Default.Schedule, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(24.dp))
+                    Column {
+                        Text("Automatic backup", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
+                        Text("Runs daily at 1:00 AM", style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
+                    }
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onEnabledChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = AuraColors.OnPrimary,
+                        checkedTrackColor = AuraColors.PrimaryContainer
+                    )
+                )
+            }
+            InfoPill("Local folder", localPath)
+            InfoPill(
+                "Latest local backup",
+                latest?.let { "${it.name} • ${formatBytes(it.length())}" } ?: "No local backup yet"
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(
+                    onClick = onTest,
+                    enabled = latest != null,
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.35f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer)
+                ) {
+                    Icon(Icons.Default.FactCheck, null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Test", style = MaterialTheme.typography.labelSmall)
+                }
+                TextButton(onClick = onRefresh) {
+                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Refresh", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoPill(label: String, value: String) {
     Row(
         Modifier.fillMaxWidth()
-            .background(AuraColors.PrimaryContainer.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-            .border(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .background(AuraColors.GlassWhite5, RoundedCornerShape(12.dp))
+            .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Icon(Icons.Default.AccountCircle, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(16.dp))
-        Text(
-            "Drive account: $email",
-            style = MaterialTheme.typography.labelSmall,
-            color = AuraColors.PrimaryContainer,
-            fontSize = 11.sp
-        )
-    }
-}
-
-@Composable
-private fun BackupHealthPanel(latestFile: File?, onTestRestore: () -> Unit, onRefresh: () -> Unit, enabled: Boolean) {
-    val stale = LocalBackupStore.isStale(latestFile)
-    Column(
-        Modifier.fillMaxWidth()
-            .background(
-                if (stale) AuraColors.Error.copy(alpha = 0.08f) else AuraColors.Primary.copy(alpha = 0.08f),
-                RoundedCornerShape(14.dp)
-            )
-            .border(1.dp,
-                if (stale) AuraColors.Error.copy(alpha = 0.25f) else AuraColors.Primary.copy(alpha = 0.25f),
-                RoundedCornerShape(14.dp))
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Backup Health", style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
-            Icon(if (stale) Icons.Default.Warning else Icons.Default.Verified, null,
-                tint = if (stale) AuraColors.Error else AuraColors.Primary, modifier = Modifier.size(20.dp))
-        }
-        Text(latestFile?.name ?: "No auto backup file found yet",
-            style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant, fontSize = 11.sp)
-        Text(
-            if (latestFile != null)
-                "Size ${formatBytes(latestFile.length())} • ${SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(latestFile.lastModified()))}"
-            else "Auto backup will create the first file at 1:15 AM.",
-            style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.72f)
-        )
-        if (stale) Text("Warning: no fresh auto backup in the last 2 days.", style = MaterialTheme.typography.bodyMedium, color = AuraColors.Error)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = onTestRestore, enabled = enabled && latestFile != null,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = AuraColors.PrimaryContainer),
-                border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.4f)),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Icon(Icons.Default.FactCheck, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("TEST RESTORE", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp)
-            }
-            TextButton(onClick = onRefresh, enabled = enabled) {
-                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Refresh", style = MaterialTheme.typography.labelSmall)
-            }
+        val icon = if (value == "No local backup yet") Icons.Default.CloudOff else Icons.Default.FolderOpen
+        Icon(icon, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(17.dp))
+        Column {
+            Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = AuraColors.OnSurfaceVariant, fontSize = 10.sp)
+            Text(value, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurface)
         }
     }
 }
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
-    bytes >= 1024L         -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
-    else                   -> "$bytes B"
-}
-
-@Composable
-private fun BackupHeroCard(state: BackupState, lastBackup: Long, driveEmail: String, sdf: SimpleDateFormat) {
-    GlassCard(Modifier.fillMaxWidth(), elevated = true, goldBorder = state is BackupState.Success) {
-        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Data Safety", style = MaterialTheme.typography.headlineMedium, color = AuraColors.OnSurface)
-                    Text(
-                        when (state) {
-                            is BackupState.Idle    -> if (lastBackup > 0) "Last backup ${sdf.format(Date(lastBackup))}" else "No backup saved yet"
-                            is BackupState.Running -> "${state.label}…"
-                            is BackupState.Success -> buildString {
-                                append("${state.message} at ${sdf.format(Date(state.timestamp))}")
-                                state.counts?.let { append("\n${it.summary()}") }
-                            }
-                            is BackupState.Error   -> state.message
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = when (state) {
-                            is BackupState.Success -> AuraColors.Primary
-                            is BackupState.Error   -> AuraColors.Error
-                            else                   -> AuraColors.OnSurfaceVariant
-                        }
-                    )
-                    if (driveEmail.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text("Drive: $driveEmail", style = MaterialTheme.typography.labelSmall,
-                            color = AuraColors.PrimaryContainer, fontSize = 10.sp)
-                    }
-                }
-                Box(Modifier.size(54.dp).background(AuraColors.GlassWhite5, RoundedCornerShape(18.dp))
-                    .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(18.dp)), contentAlignment = Alignment.Center) {
-                    when (state) {
-                        is BackupState.Running -> CircularProgressIndicator(color = AuraColors.PrimaryContainer, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
-                        is BackupState.Success -> Icon(Icons.Default.CheckCircle, null, tint = AuraColors.Primary, modifier = Modifier.size(28.dp))
-                        is BackupState.Error   -> Icon(Icons.Default.Error, null, tint = AuraColors.Error, modifier = Modifier.size(28.dp))
-                        else                   -> Icon(Icons.Default.Lock, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(28.dp))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionHeader(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String) {
-    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.size(38.dp).background(AuraColors.GlassWhite5, RoundedCornerShape(12.dp))
-            .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
-            Icon(icon, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(19.dp))
-        }
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = AuraColors.OnSurface, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant.copy(alpha = 0.72f))
-        }
-    }
-}
-
-@Composable
-private fun BackupLocationPill(value: String) {
-    Row(
-        Modifier.fillMaxWidth().background(AuraColors.GlassWhite5, RoundedCornerShape(12.dp))
-            .border(1.dp, AuraColors.GlassWhite10, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Icon(Icons.Default.InsertDriveFile, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(16.dp))
-        Text(value.substringAfterLast('/').takeLast(64), style = MaterialTheme.typography.labelSmall,
-            color = AuraColors.OnSurfaceVariant, fontSize = 11.sp)
-    }
-}
-
-@Composable
-private fun FlowStep(number: String, text: String) {
-    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(Modifier.size(24.dp).background(AuraColors.PrimaryContainer.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
-            contentAlignment = Alignment.Center) {
-            Text(number, style = MaterialTheme.typography.labelSmall, color = AuraColors.PrimaryContainer, fontSize = 10.sp)
-        }
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
-    }
+    bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 private fun android.content.Context.persistBackupUri(uri: Uri, read: Boolean = true, write: Boolean) {

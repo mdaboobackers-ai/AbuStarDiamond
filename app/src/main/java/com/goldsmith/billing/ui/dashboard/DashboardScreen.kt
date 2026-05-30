@@ -36,6 +36,7 @@ import com.goldsmith.billing.data.model.CompanyProfile
 import com.goldsmith.billing.data.remote.MarketRateSnapshot
 import com.goldsmith.billing.data.repository.AppSettings
 import com.goldsmith.billing.data.repository.SettingsRepository
+import com.goldsmith.billing.ui.adaptive.WindowSize
 import com.goldsmith.billing.ui.components.*
 import com.goldsmith.billing.ui.theme.AuraColors
 import com.goldsmith.billing.util.CelebrationWishUtil
@@ -142,7 +143,21 @@ class DashboardViewModel @Inject constructor(
     }
 
     fun refreshMarketRate(savedRate24K: Double) = viewModelScope.launch {
-        marketRate.value = goldRateService.fetchCurrentMarketSnapshot(savedRate24K)
+        val latestRates = goldRateService.fetchLatestGoldRates()
+        if (latestRates != null && latestRates.rate24K in 10_000.0..25_000.0) {
+            settingsRepo.updateGoldRatesManual(
+                rate24K = latestRates.rate24K,
+                rate22K = latestRates.rate22K ?: latestRates.rate24K * 0.916,
+                rate20K = latestRates.rate20K ?: latestRates.rate24K * (20.0 / 24.0),
+                rate18K = latestRates.rate18K ?: latestRates.rate24K * 0.75
+            )
+            marketRate.value = MarketRateSnapshot(
+                rate24K = latestRates.rate24K,
+                sourceLabel = latestRates.sourceLabel
+            )
+        } else {
+            marketRate.value = goldRateService.fetchCurrentMarketSnapshot(savedRate24K)
+        }
     }
 }
 
@@ -159,12 +174,13 @@ fun DashboardScreen(
     onMelting: () -> Unit,
     onAnalytics: () -> Unit,
     onHallmarkScan: () -> Unit,
+    windowSize: WindowSize = WindowSize.COMPACT,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
     val state by viewModel.uiState.collectAsState()
 
-    LaunchedEffect(state.settings.goldRate24K) {
+    LaunchedEffect(Unit) {
         viewModel.refreshMarketRate(state.settings.goldRate24K)
     }
 
@@ -207,9 +223,21 @@ fun DashboardScreen(
                     .background(AuraColors.PrimaryContainer.copy(alpha = 0.05f))
             )
 
+            val dashboardModifier = if (windowSize == WindowSize.COMPACT) {
+                Modifier.fillMaxSize().padding(padding)
+            } else {
+                Modifier.fillMaxHeight()
+                    .widthIn(max = if (windowSize == WindowSize.MEDIUM) 760.dp else 980.dp)
+                    .align(Alignment.TopCenter)
+                    .padding(padding)
+            }
+
             LazyColumn(
-                Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(16.dp),
+                dashboardModifier,
+                contentPadding = PaddingValues(
+                    horizontal = if (windowSize == WindowSize.COMPACT) 16.dp else 28.dp,
+                    vertical = 18.dp
+                ),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // ── Market Pulse ──────────────────────────────────────────────

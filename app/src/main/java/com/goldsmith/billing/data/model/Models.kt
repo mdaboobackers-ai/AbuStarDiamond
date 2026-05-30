@@ -22,9 +22,10 @@ class ListConverter {
 }
 
 // ─── Customer ─────────────────────────────────────────────────────────────────
-@Entity(tableName = "customers")
+@Entity(tableName = "customers", indices = [Index("externalId")])
 data class Customer(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val externalId: String = "",
     val name: String,
     val companyName: String = "",
     val phone: String,
@@ -170,7 +171,7 @@ data class MeltingRecord(
     val updatedAt: Date = Date()
 )
 
-enum class MeltingStatus { PENDING, TESTED, ADJUSTED, APPROVED }
+enum class MeltingStatus { PENDING, TESTED, ADJUSTED }
 
 // ─── Invoice Payment ──────────────────────────────────────────────────────────
 @Entity(

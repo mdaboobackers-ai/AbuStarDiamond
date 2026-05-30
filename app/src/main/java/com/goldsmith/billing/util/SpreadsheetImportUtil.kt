@@ -2,11 +2,15 @@ package com.goldsmith.billing.util
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.w3c.dom.Element
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileInputStream
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -17,6 +21,7 @@ import java.util.zip.ZipOutputStream
 import javax.xml.parsers.DocumentBuilderFactory
 
 data class ImportedCustomerRow(
+    val customerId: String = "",
     val name: String,
     val phone: String,
     val companyName: String = "",
@@ -46,7 +51,24 @@ data class ImportPreview<T>(
     val skipped: Int
 )
 
+data class SpreadsheetReadResult(
+    val displayName: String,
+    val byteCount: Long,
+    val rows: List<Map<String, String>>
+)
+
+data class GoogleImportSource(
+    val id: String,
+    val kind: Kind,
+    val gid: String = "0"
+) {
+    enum class Kind { Sheet, DriveFile }
+}
+
 object SpreadsheetImportUtil {
+    private const val GOOGLE_IMPORT_ERROR =
+        "Paste a valid Google Sheet or Google Drive file link. The file must be shared as anyone-with-link viewer."
+
     fun customerTemplateRows(): List<List<String>> = listOf(
         listOf(
             "name",
@@ -62,6 +84,10 @@ object SpreadsheetImportUtil {
             "dob",
             "anniversary"
         )
+    )
+
+    fun customerExportHeaderRows(): List<List<String>> = listOf(
+        listOf("customer_id") + customerTemplateRows().first()
     )
 
     fun billingTemplateRows(): List<List<String>> = listOf(
@@ -82,22 +108,106 @@ object SpreadsheetImportUtil {
     }
 
     suspend fun readRowsFromUri(context: Context, uri: Uri): List<Map<String, String>> = withContext(Dispatchers.IO) {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext emptyList()
-        val name = uri.lastPathSegment.orEmpty().lowercase()
-        readRowsFromBytes(name, bytes)
+        readContentFromUri(context, uri).rows
+    }
+
+    suspend fun readContentFromUri(context: Context, uri: Uri): SpreadsheetReadResult = withContext(Dispatchers.IO) {
+        val bytes = readBytesFromUri(context, uri)
+            ?: error("Unable to open the selected file. Please choose it again from Files or Downloads.")
+        if (bytes.isEmpty()) error("The selected file opened as 0 bytes. Please choose the actual CSV/XLSX file from Files or Downloads.")
+        val name = displayName(context, uri).ifBlank { uri.lastPathSegment.orEmpty() }
+        SpreadsheetReadResult(
+            displayName = name.ifBlank { "selected file" },
+            byteCount = bytes.size.toLong(),
+            rows = readRowsFromBytes(name, bytes)
+        )
     }
 
     fun readRowsFromBytes(fileName: String, bytes: ByteArray): List<Map<String, String>> =
-        if (fileName.lowercase(Locale.ROOT).endsWith(".xlsx") || looksLikeXlsx(bytes)) parseXlsx(bytes) else parseCsv(String(bytes))
+        if (fileName.lowercase(Locale.ROOT).endsWith(".xlsx") || looksLikeXlsx(bytes)) parseXlsx(bytes) else parseCsv(bytes.toString(Charsets.UTF_8))
 
-    suspend fun readRowsFromGoogleSheet(sheetUrl: String): List<Map<String, String>> = withContext(Dispatchers.IO) {
-        val exportUrl = toCsvExportUrl(sheetUrl)
-        val connection = (URL(exportUrl).openConnection() as HttpURLConnection).apply {
+    private fun readBytesFromUri(context: Context, uri: Uri): ByteArray? {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            val bytes = stream.readBytes()
+            if (bytes.isNotEmpty()) return bytes
+        }
+        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+            descriptor.createInputStream().use { stream ->
+                val bytes = stream.readBytes()
+                if (bytes.isNotEmpty()) return bytes
+            }
+        }
+        if (uri.scheme == "file") {
+            val path = uri.path.orEmpty()
+            if (path.isNotBlank()) {
+                val file = File(path)
+                if (file.exists() && file.length() > 0L) {
+                    FileInputStream(file).use { return it.readBytes() }
+                }
+            }
+        }
+        return null
+    }
+
+    fun formatByteCount(bytes: Long): String = when {
+        bytes >= 1024L * 1024L -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024L -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        else -> "$bytes B"
+    }
+
+    fun validateGoogleImportUrl(importUrl: String): String? =
+        if (parseGoogleImportSource(importUrl) == null) GOOGLE_IMPORT_ERROR else null
+
+    suspend fun readRowsFromGoogleSheet(sheetUrl: String): List<Map<String, String>> = readRowsFromGoogleUrl(sheetUrl)
+
+    suspend fun readRowsFromGoogleUrl(importUrl: String): List<Map<String, String>> = withContext(Dispatchers.IO) {
+        val source = parseGoogleImportSource(importUrl) ?: error(GOOGLE_IMPORT_ERROR)
+        if (source.kind == GoogleImportSource.Kind.DriveFile) {
+            val bytes = downloadBytes("https://drive.google.com/uc?export=download&id=${source.id}")
+            return@withContext readRowsFromBytes("google_drive_import", bytes)
+        }
+        var lastError: String? = null
+        for (exportUrl in toCsvExportUrls(source)) {
+            val result = runCatching {
+                val text = downloadText(exportUrl)
+                val rows = if (looksLikeHtml(text)) parseHtmlTable(text) else parseCsv(text)
+                if (rows.isEmpty()) error("No rows found at $exportUrl")
+                rows
+            }
+            if (result.isSuccess) return@withContext result.getOrThrow()
+            lastError = result.exceptionOrNull()?.message
+        }
+        error(lastError ?: "Google Sheet could not be downloaded. Share it as anyone-with-link viewer and try again.")
+    }
+
+    private fun downloadText(url: String): String {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15000
             readTimeout = 20000
             requestMethod = "GET"
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 15) AbuStarDiamonds/4.0")
+            setRequestProperty("Accept", "text/csv,text/plain,text/html,*/*")
         }
-        connection.inputStream.use { parseCsv(it.bufferedReader().readText()) }
+        val code = connection.responseCode
+        if (code !in 200..299) {
+            error("Google Sheet could not be downloaded. Share it as anyone-with-link viewer and try again. HTTP $code")
+        }
+        return connection.inputStream.use { it.bufferedReader().readText() }
+    }
+
+    private fun downloadBytes(url: String): ByteArray {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15000
+            readTimeout = 20000
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 15) AbuStarDiamonds/4.0")
+            setRequestProperty("Accept", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain,*/*")
+        }
+        val code = connection.responseCode
+        if (code !in 200..299) {
+            error("Google Drive file could not be downloaded. Share it as anyone-with-link viewer and try again. HTTP $code")
+        }
+        return connection.inputStream.use { it.readBytes() }
     }
 
     fun parseCustomers(rows: List<Map<String, String>>): ImportPreview<ImportedCustomerRow> {
@@ -110,6 +220,7 @@ object SpreadsheetImportUtil {
                 null
             } else {
                 ImportedCustomerRow(
+                    customerId = CustomerIdentity.normalizeExternalId(row.pick("customerid", "customer_id", "externalid", "external_id", "shopid", "shop_id")),
                     name = name,
                     phone = phone,
                     companyName = row.pick("shop", "shopname", "companyname", "company", "businessname"),
@@ -279,12 +390,75 @@ object SpreadsheetImportUtil {
     private fun looksLikeXlsx(bytes: ByteArray): Boolean =
         bytes.size >= 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()
 
-    private fun toCsvExportUrl(sheetUrl: String): String {
-        val trimmed = sheetUrl.trim()
-        val id = Regex("/spreadsheets/d/([a-zA-Z0-9-_]+)").find(trimmed)?.groupValues?.getOrNull(1)
-        val gid = Regex("[?&]gid=([0-9]+)").find(trimmed)?.groupValues?.getOrNull(1) ?: "0"
-        return if (id != null) "https://docs.google.com/spreadsheets/d/$id/export?format=csv&gid=$gid" else trimmed
+    private fun displayName(context: Context, uri: Uri): String =
+        runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0).orEmpty() else ""
+            }.orEmpty()
+        }.getOrDefault("")
+
+    private fun toCsvExportUrls(source: GoogleImportSource): List<String> =
+        listOf(
+            "https://docs.google.com/spreadsheets/d/${source.id}/export?format=csv&gid=${source.gid}",
+            "https://docs.google.com/spreadsheets/d/${source.id}/gviz/tq?tqx=out:csv&gid=${source.gid}"
+        )
+
+    private fun parseGoogleImportSource(importUrl: String): GoogleImportSource? {
+        val trimmed = importUrl.trim()
+        if (trimmed.isBlank()) return null
+        val uri = runCatching { URI(trimmed) }.getOrNull() ?: return null
+        val host = uri.host.orEmpty().lowercase(Locale.ROOT)
+        val path = uri.path.orEmpty()
+        val query = parseQuery(uri.rawQuery.orEmpty())
+        val gid = query["gid"] ?: "0"
+        return when {
+            host == "docs.google.com" && path.contains("/spreadsheets/d/") -> {
+                val id = Regex("/spreadsheets/d/([a-zA-Z0-9-_]+)").find(path)?.groupValues?.getOrNull(1)
+                id?.let { GoogleImportSource(it, GoogleImportSource.Kind.Sheet, gid) }
+            }
+            host == "drive.google.com" && path.contains("/file/d/") -> {
+                val id = Regex("/file/d/([a-zA-Z0-9-_]+)").find(path)?.groupValues?.getOrNull(1)
+                id?.let { GoogleImportSource(it, GoogleImportSource.Kind.DriveFile) }
+            }
+            host == "drive.google.com" && (path == "/open" || path == "/uc") -> {
+                query["id"]?.takeIf { it.isNotBlank() }
+                    ?.let { GoogleImportSource(it, GoogleImportSource.Kind.DriveFile) }
+            }
+            else -> null
+        }
     }
+
+    private fun parseQuery(query: String): Map<String, String> =
+        query.split('&')
+            .mapNotNull { pair ->
+                val parts = pair.split('=', limit = 2)
+                if (parts.size == 2) parts[0] to parts[1] else null
+            }
+            .toMap()
+
+    private fun looksLikeHtml(text: String): Boolean =
+        text.trimStart().startsWith("<", ignoreCase = true)
+
+    private fun parseHtmlTable(html: String): List<Map<String, String>> {
+        val rows = Regex("<tr[\\s\\S]*?</tr>", RegexOption.IGNORE_CASE).findAll(html).map { rowMatch ->
+            Regex("<t[dh][^>]*>([\\s\\S]*?)</t[dh]>", RegexOption.IGNORE_CASE)
+                .findAll(rowMatch.value)
+                .map { cellMatch -> htmlCellText(cellMatch.groupValues[1]) }
+                .toList()
+        }.filter { it.any(String::isNotBlank) }.toList()
+        return rowsToMaps(rows)
+    }
+
+    private fun htmlCellText(value: String): String =
+        value.replace(Regex("<[^>]+>"), " ")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace(Regex("\\s+"), " ")
+            .trim()
 
     private fun purityFromKaratLabel(value: String): String =
         when (value.filter { it.isDigit() }) {

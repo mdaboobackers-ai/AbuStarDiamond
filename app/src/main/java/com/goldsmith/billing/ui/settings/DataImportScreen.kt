@@ -1,5 +1,6 @@
 package com.goldsmith.billing.ui.settings
 
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -46,6 +47,8 @@ import com.goldsmith.billing.ui.components.GhostTextField
 import com.goldsmith.billing.ui.components.GlassCard
 import com.goldsmith.billing.ui.components.GoldButton
 import com.goldsmith.billing.ui.theme.AuraColors
+import com.goldsmith.billing.util.CustomerIdentity
+import com.goldsmith.billing.util.CustomerIdentity.withStableExternalId
 import com.goldsmith.billing.util.GoldCalc
 import com.goldsmith.billing.util.SpreadsheetImportUtil
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -66,7 +69,10 @@ data class DataImportState(
     val message: String = "",
     val imported: Int = 0,
     val skipped: Int = 0,
-    val rowsRead: Int = 0
+    val rowsRead: Int = 0,
+    val sourceName: String = "",
+    val sourceBytes: Long = 0L,
+    val pendingLocalFile: Boolean = false
 )
 
 @HiltViewModel
@@ -80,13 +86,51 @@ class DataImportViewModel @Inject constructor(
 ) : ViewModel() {
     private val _state = MutableStateFlow(DataImportState())
     val state = _state.asStateFlow()
+    private var pendingLocalContent: com.goldsmith.billing.util.SpreadsheetReadResult? = null
 
-    fun importFromFile(context: android.content.Context, uri: Uri, mode: ImportMode) = viewModelScope.launch {
-        runImport(mode) { SpreadsheetImportUtil.readRowsFromUri(context, uri) }
+    fun prepareLocalFile(context: android.content.Context, uri: Uri) = viewModelScope.launch {
+        pendingLocalContent = null
+        _state.value = DataImportState(loading = true, message = "Reading selected file...")
+        runCatching {
+            SpreadsheetImportUtil.readContentFromUri(context, uri)
+        }.onSuccess { content ->
+            pendingLocalContent = content
+            _state.value = DataImportState(
+                message = "Selected ${content.displayName} (${SpreadsheetImportUtil.formatByteCount(content.byteCount)}). Tap Import selected file.",
+                sourceName = content.displayName,
+                sourceBytes = content.byteCount,
+                pendingLocalFile = true
+            )
+        }.onFailure { error ->
+            _state.value = DataImportState(message = error.message ?: "Import failed")
+        }
+    }
+
+    fun importPreparedLocalFile(mode: ImportMode) = viewModelScope.launch {
+        val content = pendingLocalContent
+        if (content == null) {
+            _state.value = DataImportState(message = "Choose a local CSV or XLSX file first.")
+            return@launch
+        }
+        runImportRows(mode, content.rows, content.displayName, content.byteCount)
+    }
+
+    fun clearPreparedLocalFile() {
+        pendingLocalContent = null
+        _state.value = DataImportState()
     }
 
     fun importFromSheet(url: String, mode: ImportMode) = viewModelScope.launch {
-        runImport(mode) { SpreadsheetImportUtil.readRowsFromGoogleSheet(url) }
+        val trimmed = url.trim()
+        SpreadsheetImportUtil.validateGoogleImportUrl(trimmed)?.let { message ->
+            _state.value = DataImportState(message = message)
+            return@launch
+        }
+        runImport(mode) { SpreadsheetImportUtil.readRowsFromGoogleUrl(trimmed) }
+    }
+
+    fun showImportMessage(message: String) {
+        _state.value = DataImportState(message = message)
     }
 
     fun verifyPin(pin: String): Boolean = keystoreManager.verifyPin(pin)
@@ -109,21 +153,7 @@ class DataImportViewModel @Inject constructor(
         _state.value = DataImportState(loading = true, message = "Reading spreadsheet...")
         runCatching {
             val rows = readRows()
-            if (rows.isEmpty()) {
-                return@runCatching DataImportState(
-                    message = "No readable rows found. Use the blank XLSX format and keep the header row.",
-                    imported = 0,
-                    skipped = 0,
-                    rowsRead = 0
-                )
-            }
-            val detectedMode = detectImportMode(rows, mode)
-            val result = if (detectedMode == ImportMode.Customers) importCustomers(rows) else importBilling(rows)
-            if (detectedMode != mode) {
-                result.copy(message = "Detected ${detectedMode.name.lowercase(Locale.ROOT)} file. ${result.message}", rowsRead = rows.size)
-            } else {
-                result.copy(rowsRead = rows.size)
-            }
+            importRows(mode, rows)
         }.onSuccess { result ->
             _state.value = result
         }.onFailure { error ->
@@ -131,11 +161,63 @@ class DataImportViewModel @Inject constructor(
         }
     }
 
+    private suspend fun runImportRows(mode: ImportMode, rows: List<Map<String, String>>, sourceName: String, sourceBytes: Long) {
+        _state.value = DataImportState(
+            loading = true,
+            message = "Reading $sourceName (${SpreadsheetImportUtil.formatByteCount(sourceBytes)})...",
+            sourceName = sourceName,
+            sourceBytes = sourceBytes
+        )
+        runCatching {
+            importRows(mode, rows).copy(sourceName = sourceName, sourceBytes = sourceBytes)
+        }.onSuccess { result ->
+            _state.value = result
+        }.onFailure { error ->
+            _state.value = DataImportState(
+                message = error.message ?: "Import failed",
+                sourceName = sourceName,
+                sourceBytes = sourceBytes
+            )
+        }
+    }
+
+    private suspend fun importRows(mode: ImportMode, rows: List<Map<String, String>>): DataImportState {
+        if (rows.isEmpty()) {
+            return DataImportState(
+                message = "No readable rows found. Use the blank XLSX format and keep the header row.",
+                imported = 0,
+                skipped = 0,
+                rowsRead = 0
+            )
+        }
+        val detectedMode = detectImportMode(rows, mode)
+        val result = if (detectedMode == ImportMode.Customers) importCustomers(rows) else importBilling(rows)
+        return if (detectedMode != mode) {
+            result.copy(message = "Detected ${detectedMode.name.lowercase(Locale.ROOT)} file. ${result.message}", rowsRead = rows.size)
+        } else {
+            result.copy(rowsRead = rows.size)
+        }
+    }
+
     private suspend fun importCustomers(rows: List<Map<String, String>>): DataImportState {
+        _state.value = _state.value.copy(loading = true, message = "Validating customer rows...")
         val preview = SpreadsheetImportUtil.parseCustomers(rows)
-        preview.rows.forEach { row ->
-            val existing = customerDao.getCustomerByPhone(row.phone)
+        preview.rows.forEachIndexed { index, row ->
+            _state.value = _state.value.copy(
+                loading = true,
+                message = "Importing customer ${index + 1} of ${preview.rows.size}..."
+            )
+            val existing = if (row.customerId.isNotBlank()) {
+                customerDao.getCustomerByExternalId(row.customerId)?.also { matched ->
+                    if (!CustomerIdentity.namesMatch(row.name, matched)) {
+                        error("Customer ID ${row.customerId} belongs to ${matched.name}. Import row has ${row.name}. Fix the name or remove the ID.")
+                    }
+                }
+            } else {
+                customerDao.getCustomerByPhone(row.phone)
+            }
             val customer = existing?.copy(
+                externalId = CustomerIdentity.normalizeExternalId(existing.externalId).ifBlank { CustomerIdentity.newExternalId() },
                 name = row.name,
                 phone = row.phone,
                 companyName = row.companyName,
@@ -150,6 +232,7 @@ class DataImportViewModel @Inject constructor(
                 anniversary = row.anniversary,
                 updatedAt = Date()
             ) ?: Customer(
+                externalId = CustomerIdentity.normalizeExternalId(row.customerId).ifBlank { CustomerIdentity.newExternalId() },
                 name = row.name,
                 phone = row.phone,
                 companyName = row.companyName,
@@ -163,7 +246,7 @@ class DataImportViewModel @Inject constructor(
                 dob = row.dob,
                 anniversary = row.anniversary
             )
-            if (existing == null) customerDao.insertCustomer(customer) else customerDao.updateCustomer(customer)
+            if (existing == null) customerDao.insertCustomer(customer.withStableExternalId()) else customerDao.updateCustomer(customer.withStableExternalId())
         }
         val message = if (preview.rows.isEmpty()) {
             "No customers imported. Check name and phone columns."
@@ -191,7 +274,12 @@ class DataImportViewModel @Inject constructor(
                 continue
             }
             val customer = customerDao.getCustomerByPhone(phone).let { existing ->
-                existing ?: Customer(
+                if (existing != null) {
+                    val stable = existing.withStableExternalId()
+                    if (stable.externalId != existing.externalId) customerDao.updateCustomer(stable)
+                    stable
+                } else Customer(
+                    externalId = CustomerIdentity.newExternalId(),
                     name = customerName,
                     phone = phone,
                     companyName = first.pick("shop", "shopname", "company", "companyname"),
@@ -305,22 +393,25 @@ class DataImportViewModel @Inject constructor(
         )
 
     private suspend fun customerExportBytes(): ByteArray {
-        val rows = mutableListOf(SpreadsheetImportUtil.customerTemplateRows().first())
+        val rows = mutableListOf(SpreadsheetImportUtil.customerExportHeaderRows().first())
         val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
         customerDao.getAllCustomersSync().forEach { c ->
+            val stable = c.withStableExternalId()
+            if (stable.externalId != c.externalId) customerDao.updateCustomer(stable)
             rows += listOf(
-                c.name,
-                c.phone,
-                c.companyName,
-                c.doorNo,
-                c.address,
-                c.city,
-                c.state,
-                c.pincode,
-                c.gstNumber,
-                c.email,
-                c.dob?.let(dateFormat::format).orEmpty(),
-                c.anniversary?.let(dateFormat::format).orEmpty()
+                stable.externalId,
+                stable.name,
+                stable.phone,
+                stable.companyName,
+                stable.doorNo,
+                stable.address,
+                stable.city,
+                stable.state,
+                stable.pincode,
+                stable.gstNumber,
+                stable.email,
+                stable.dob?.let(dateFormat::format).orEmpty(),
+                stable.anniversary?.let(dateFormat::format).orEmpty()
             )
         }
         return SpreadsheetImportUtil.buildXlsx(rows, "Customers")
@@ -352,7 +443,9 @@ class DataImportViewModel @Inject constructor(
     }
 
     private fun writeXlsx(context: android.content.Context, uri: Uri, bytes: ByteArray, message: String) {
-        context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+        val output = context.contentResolver.openOutputStream(uri)
+            ?: error("Unable to open the selected file for writing.")
+        output.use { it.write(bytes) }
         _state.value = DataImportState(message = message)
     }
 
@@ -376,12 +469,16 @@ fun DataImportScreen(onBack: () -> Unit, viewModel: DataImportViewModel = hiltVi
     val context = LocalContext.current
     val state by viewModel.state.collectAsState()
     var mode by remember { mutableStateOf(ImportMode.Customers) }
-    var sheetUrl by remember { mutableStateOf("") }
+    var importSource by remember { mutableStateOf("") }
     var pendingWrite by remember { mutableStateOf<WriteAction?>(null) }
     var showExportPin by remember { mutableStateOf(false) }
     var showExportDrawer by remember { mutableStateOf(false) }
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { viewModel.importFromFile(context, it, mode) }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            context.persistImportReadUri(it)
+            importSource = it.lastPathSegment?.substringAfterLast('/').orEmpty().ifBlank { "Selected file" }
+            viewModel.prepareLocalFile(context, it)
+        }
     }
     val xlsxWriter = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -401,6 +498,9 @@ fun DataImportScreen(onBack: () -> Unit, viewModel: DataImportViewModel = hiltVi
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null, tint = AuraColors.PrimaryContainer) } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AuraColors.SurfaceContainerLowest.copy(alpha = 0.9f))
             )
+        },
+        bottomBar = {
+            ImportStatusBar(state)
         }
     ) { padding ->
         LazyColumn(
@@ -423,7 +523,7 @@ fun DataImportScreen(onBack: () -> Unit, viewModel: DataImportViewModel = hiltVi
             item {
                 GlassCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("File Import", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
+                        Text("Import Source", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
                         Text(importHelp(mode), style = MaterialTheme.typography.bodyMedium, color = AuraColors.OnSurfaceVariant)
                         OutlinedButton(
                             onClick = { showExportDrawer = true },
@@ -435,51 +535,65 @@ fun DataImportScreen(onBack: () -> Unit, viewModel: DataImportViewModel = hiltVi
                             Spacer(Modifier.width(8.dp))
                             Text("Export / Blank Format", color = AuraColors.PrimaryContainer, fontWeight = FontWeight.SemiBold)
                         }
-                        OutlinedButton(
-                            onClick = { filePicker.launch("*/*") },
-                            modifier = Modifier.fillMaxWidth().height(52.dp),
-                            border = BorderStroke(1.dp, AuraColors.PrimaryContainer.copy(alpha = 0.45f)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.UploadFile, null, tint = AuraColors.PrimaryContainer)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Choose CSV or XLSX", color = AuraColors.PrimaryContainer, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-            }
-
-            item {
-                GlassCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Google Sheet URL", style = MaterialTheme.typography.headlineSmall, color = AuraColors.OnSurface)
                         GhostTextField(
-                            value = sheetUrl,
-                            onValueChange = { sheetUrl = it },
-                            label = "Paste shared Google Sheet link",
+                            value = importSource,
+                            onValueChange = {
+                                importSource = it
+                                viewModel.clearPreparedLocalFile()
+                            },
+                            label = "Google Sheet/Drive URL or selected file",
+                            placeholder = "Paste Google link or pick CSV/XLSX",
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                            singleLine = false
+                            singleLine = true,
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = {
+                                        filePicker.launch(
+                                            arrayOf(
+                                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                "text/csv",
+                                                "text/comma-separated-values",
+                                                "application/csv",
+                                                "*/*"
+                                            )
+                                        )
+                                    }
+                                ) {
+                                    Icon(Icons.Default.UploadFile, "Pick file", tint = AuraColors.PrimaryContainer)
+                                }
+                            }
                         )
                         GoldButton(
-                            text = "Import from Google Sheet",
-                            onClick = { if (sheetUrl.isNotBlank()) viewModel.importFromSheet(sheetUrl, mode) },
-                            modifier = Modifier.fillMaxWidth().height(52.dp)
+                            text = if (state.pendingLocalFile) "Import selected file" else "Import from link",
+                            onClick = {
+                                if (state.pendingLocalFile) {
+                                    viewModel.importPreparedLocalFile(mode)
+                                } else {
+                                    if (importSource.isBlank()) {
+                                        viewModel.showImportMessage("Paste a Google Sheet/Drive link or pick a CSV/XLSX file first.")
+                                    } else {
+                                        viewModel.importFromSheet(importSource, mode)
+                                    }
+                                }
+                            },
+                            enabled = !state.loading,
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            icon = { Icon(Icons.Default.UploadFile, null, modifier = Modifier.size(18.dp)) }
                         )
-                    }
-                }
-            }
-
-            item {
-                GlassCard(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Icon(Icons.Default.CloudDownload, null, tint = AuraColors.PrimaryContainer)
-                        Column(Modifier.weight(1f)) {
-                            Text(if (state.loading) "Importing..." else state.message.ifBlank { "Ready to import" }, color = AuraColors.OnSurface, style = MaterialTheme.typography.bodyLarge)
-                            Text("Rows: ${state.rowsRead} | Imported: ${state.imported} | Skipped: ${state.skipped}", color = AuraColors.OnSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                        if (state.message.isNotBlank()) {
+                            Text(
+                                state.message,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (state.message.contains("failed", ignoreCase = true) ||
+                                    state.message.contains("unable", ignoreCase = true)
+                                ) AuraColors.Error else AuraColors.OnSurfaceVariant
+                            )
                         }
                     }
                 }
             }
+
+            item { Spacer(Modifier.height(96.dp)) }
         }
     }
 
@@ -530,6 +644,56 @@ fun DataImportScreen(onBack: () -> Unit, viewModel: DataImportViewModel = hiltVi
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun ImportStatusBar(state: DataImportState) {
+    Surface(
+        color = AuraColors.SurfaceContainerLowest.copy(alpha = 0.96f),
+        tonalElevation = 8.dp,
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                Modifier.size(42.dp).background(AuraColors.PrimaryContainer.copy(alpha = 0.14f), RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (state.loading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = AuraColors.PrimaryContainer
+                    )
+                } else {
+                    Icon(Icons.Default.CloudDownload, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(20.dp))
+                }
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (state.loading) state.message.ifBlank { "Importing..." } else state.message.ifBlank { "Ready to import" },
+                    color = AuraColors.OnSurface,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2
+                )
+                val fileLabel = if (state.sourceName.isNotBlank()) {
+                    "File: ${state.sourceName} - ${SpreadsheetImportUtil.formatByteCount(state.sourceBytes)} | Rows ${state.rowsRead}, imported ${state.imported}, skipped ${state.skipped}"
+                } else {
+                    "Rows: ${state.rowsRead} | Imported: ${state.imported} | Skipped: ${state.skipped}"
+                }
+                Text(
+                    fileLabel,
+                    color = AuraColors.OnSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1
+                )
+            }
+        }
     }
 }
 
@@ -629,6 +793,12 @@ private fun Map<String, String>.pick(vararg keys: String): String =
 
 private fun normalizeImportKey(value: String): String =
     value.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
+
+private fun android.content.Context.persistImportReadUri(uri: Uri) {
+    runCatching {
+        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+}
 
 private inline fun <T, K> Iterable<T>.groupByIndexed(keySelector: (Int, T) -> K): Map<K, List<T>> {
     val destination = LinkedHashMap<K, MutableList<T>>()

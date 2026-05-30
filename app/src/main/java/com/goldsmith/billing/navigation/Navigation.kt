@@ -80,14 +80,15 @@ fun GoldsmithNavGraph(
         // ── Auth / Onboarding ─────────────────────────────────────────────
 
         composable(Screen.Onboarding.route) {
+            val nextAfterOnboarding = if (authViewModel.isPinSet) Screen.Dashboard.route else Screen.PinSetup.route
             OnboardingRestoreScreen(
                 onRestoreDone = {
-                    navController.navigate(Screen.PinSetup.route) {
+                    navController.navigate(nextAfterOnboarding) {
                         popUpTo(Screen.Onboarding.route) { inclusive = true }
                     }
                 },
                 onSkip = {
-                    navController.navigate(Screen.PrefixSelect.route) {
+                    navController.navigate(nextAfterOnboarding) {
                         popUpTo(Screen.Onboarding.route) { inclusive = true }
                     }
                 }
@@ -113,7 +114,8 @@ fun GoldsmithNavGraph(
         composable(Screen.PinVerify.route) {
             PinVerifyScreen(
                 onVerified = {
-                    navController.navigate(Screen.Dashboard.route) {
+                    val next = if (settings.selectedBackupEmail.isBlank()) Screen.Onboarding.route else Screen.Dashboard.route
+                    navController.navigate(next) {
                         popUpTo(Screen.PinVerify.route) { inclusive = true }
                     }
                 },
@@ -130,9 +132,8 @@ fun GoldsmithNavGraph(
         // ── Main screens (with adaptive nav) ──────────────────────────────
 
         composable(Screen.Dashboard.route) {
-            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) {
                 DashboardScreen(
-                    contentPadding = padding,
                     onNewBill      = { navController.navigate(Screen.NewBill.withCustomer()) },
                     onAddCustomer  = { navController.navigate(Screen.Customers.route) },
                     onBackup       = { navController.navigate(Screen.Backup.route) },
@@ -148,13 +149,11 @@ fun GoldsmithNavGraph(
         }
 
         composable(Screen.Customers.route) {
-            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) {
                 CustomerListScreen(
-                    contentPadding = padding,
-                    windowSize     = windowSize,
-                    onCustomer     = { id -> navController.navigate(Screen.CustomerDetail.withId(id)) },
-                    onNewBill      = { id -> navController.navigate(Screen.NewBill.withCustomer(id)) },
-                    onBack         = { navController.popBackStack() }
+                    onCustomerDetail     = { id -> navController.navigate(Screen.CustomerDetail.withId(id)) },
+                    onNewBillForCustomer = { id -> navController.navigate(Screen.NewBill.withCustomer(id)) },
+                    onBack               = { navController.popBackStack() }
                 )
             }
         }
@@ -166,19 +165,17 @@ fun GoldsmithNavGraph(
             val customerId = back.arguments?.getLong("customerId") ?: return@composable
             CustomerDetailScreen(
                 customerId = customerId,
-                windowSize = windowSize,
                 onBack     = { navController.popBackStack() },
                 onNewBill  = { navController.navigate(Screen.NewBill.withCustomer(customerId)) }
             )
         }
 
         composable(Screen.InvoiceHistory.route) {
-            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) {
                 InvoiceHistoryScreen(
-                    contentPadding = padding,
-                    windowSize     = windowSize,
-                    onBack         = { navController.popBackStack() },
-                    onInvoice      = { id -> navController.navigate(Screen.InvoiceDetail.withId(id)) }
+                    onBack          = { navController.popBackStack() },
+                    onInvoiceDetail = { id -> navController.navigate(Screen.InvoiceDetail.withId(id)) },
+                    onNewBill       = { navController.navigate(Screen.NewBill.withCustomer()) }
                 )
             }
         }
@@ -190,29 +187,26 @@ fun GoldsmithNavGraph(
             val invoiceId = back.arguments?.getLong("invoiceId") ?: return@composable
             InvoiceDetailScreen(
                 invoiceId  = invoiceId,
-                windowSize = windowSize,
                 onBack     = { navController.popBackStack() }
             )
         }
 
         composable(Screen.Melting.route) {
-            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
-                MeltingScreen(contentPadding = padding, windowSize = windowSize,
-                    onBack = { navController.popBackStack() })
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) {
+                MeltingScreen(onBack = { navController.popBackStack() })
             }
         }
 
         composable(Screen.Backup.route) {
-            AdaptiveScaffold(navController = navController, windowSize = windowSize) { padding ->
+            AdaptiveScaffold(navController = navController, windowSize = windowSize) {
                 BackupScreen(onBack = { navController.popBackStack() }, windowSize = windowSize)
             }
         }
 
         composable(Screen.Settings.route) {
             SettingsScreen(
-                onBack       = { navController.popBackStack() },
-                onDataImport = { navController.navigate(Screen.DataImport.route) },
-                windowSize   = windowSize
+                onBack   = { navController.popBackStack() },
+                onImport = { navController.navigate(Screen.DataImport.route) }
             )
         }
 
@@ -221,7 +215,7 @@ fun GoldsmithNavGraph(
         }
 
         composable(Screen.Analytics.route) {
-            AnalyticsDashboardScreen(onBack = { navController.popBackStack() }, windowSize = windowSize)
+            AnalyticsDashboardScreen(onBack = { navController.popBackStack() })
         }
 
         composable(Screen.HallmarkScan.route) {
@@ -237,9 +231,8 @@ fun GoldsmithNavGraph(
             val customerId = back.arguments?.getString("customerId")?.toLongOrNull()
             BillingScreen(
                 preselectedCustomerId = customerId,
-                windowSize            = windowSize,
                 onBack                = { navController.popBackStack() },
-                onInvoiceSaved        = { id ->
+                onInvoiceCreated      = { id ->
                     navController.navigate(Screen.InvoiceDetail.withId(id)) {
                         popUpTo(Screen.Dashboard.route)
                     }
