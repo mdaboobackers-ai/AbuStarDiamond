@@ -44,12 +44,29 @@ class MainViewModel @Inject constructor(
     private val _lockApp = MutableStateFlow(false)
     val lockApp = _lockApp.asStateFlow()
 
+    // FIX: Track whether app is in foreground.
+    // Timer must NOT run while app is paused/backgrounded — that was the regression.
+    private var isForegrounded = false
+
+    fun onForeground() {
+        isForegrounded = true
+        resetInactivityTimer()
+    }
+
+    fun onBackground() {
+        // FIX: Cancel timer when app goes background — user is not active.
+        // Restart it fresh when they come back (onForeground).
+        isForegrounded = false
+        inactivityJob?.cancel()
+    }
+
     fun resetInactivityTimer() {
         inactivityJob?.cancel()
+        if (!isForegrounded) return                   // never run while backgrounded
         val lockSecs = settings.value.inactivityLockSecs.toLong()
-        if (lockSecs <= 0) return
+        if (lockSecs <= 0) return                     // 0 = disabled
         inactivityJob = viewModelScope.launch {
-            delay(lockSecs * 1000)
+            delay(lockSecs * 1000L)
             _lockApp.value = true
         }
     }
@@ -78,15 +95,12 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
-
         window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
 
         setContent {
             val settings   by viewModel.settings.collectAsState()
             val locked     by viewModel.lockApp.collectAsState()
             var showSplash by remember { mutableStateOf(true) }
-
-            // Detect phone vs tablet once at root — passed to every screen
             val windowSize = rememberWindowSize()
 
             GoldsmithBillingTheme(darkTheme = settings.isDarkTheme) {
@@ -119,10 +133,13 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    override fun onUserInteraction() { super.onUserInteraction(); viewModel.resetInactivityTimer() }
-    override fun onResume()          { super.onResume();          viewModel.resetInactivityTimer() }
-    override fun onPause() {
-        super.onPause()
+    // FIX: Only reset timer on actual user interactions while foregrounded
+    override fun onResume()  { super.onResume();  viewModel.onForeground() }
+    // FIX: Cancel timer when app goes to background — not restart it
+    override fun onPause()   { super.onPause();   viewModel.onBackground() }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
         viewModel.resetInactivityTimer()
     }
     override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
@@ -132,9 +149,5 @@ class MainActivity : FragmentActivity() {
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         viewModel.resetInactivityTimer()
         return super.dispatchKeyEvent(event)
-    }
-    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent?): Boolean {
-        viewModel.resetInactivityTimer()
-        return super.dispatchGenericMotionEvent(ev)
     }
 }

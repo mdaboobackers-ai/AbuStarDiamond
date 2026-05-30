@@ -21,7 +21,8 @@ data class MarketRateSnapshot(
     val state: String = "Tamil Nadu",
     val country: String = "India",
     val sourceLabel: String = "Saved manual rate",
-    val isLocationBased: Boolean = false
+    val isLocationBased: Boolean = false,
+    val fetchedAt: Long = 0L   // epoch millis; 0 = not yet fetched (manual/saved)
 )
 
 data class LatestGoldRates(
@@ -50,7 +51,8 @@ class GoldRateService @Inject constructor(
                 state = state,
                 country = country,
                 sourceLabel = websiteRate.source,
-                isLocationBased = false
+                isLocationBased = false,
+                fetchedAt = System.currentTimeMillis()
             )
         }
         val estimatedRate = estimateTamilNaduRate(savedRate24K, city)
@@ -61,7 +63,8 @@ class GoldRateService @Inject constructor(
             state = state,
             country = country,
             sourceLabel = if (city.isNotEmpty()) "Location estimate" else "Saved manual rate",
-            isLocationBased = city.isNotEmpty()
+            isLocationBased = city.isNotEmpty(),
+            fetchedAt = System.currentTimeMillis()
         )
     }
 

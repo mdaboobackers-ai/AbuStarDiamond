@@ -142,7 +142,24 @@ class DashboardViewModel @Inject constructor(
         settingsRepo.updateGoldRates(rate24K)
     }
 
-    fun refreshMarketRate(savedRate24K: Double) = viewModelScope.launch {
+    fun refreshMarketRate(savedRate24K: Double, force: Boolean = false) = viewModelScope.launch {
+        val now = System.currentTimeMillis()
+        val cal = Calendar.getInstance()
+        val hour = cal.get(Calendar.HOUR_OF_DAY)
+        val todayMidnight = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val lastFetch = marketRate.value.fetchedAt
+        // Smart fetch: first open of day, 10am window, 6pm window — or manual force
+        val shouldFetch = force
+            || lastFetch < todayMidnight                              // first open of day
+            || (hour == 10 && lastFetch < todayMidnight + 10 * 3600_000L)   // 10am
+            || (hour == 18 && lastFetch < todayMidnight + 18 * 3600_000L)   // 6pm
+
+        if (!shouldFetch) return@launch
+
         val latestRates = goldRateService.fetchLatestGoldRates()
         if (latestRates != null && latestRates.rate24K in 10_000.0..25_000.0) {
             settingsRepo.updateGoldRatesManual(
@@ -153,10 +170,12 @@ class DashboardViewModel @Inject constructor(
             )
             marketRate.value = MarketRateSnapshot(
                 rate24K = latestRates.rate24K,
-                sourceLabel = latestRates.sourceLabel
+                sourceLabel = latestRates.sourceLabel,
+                fetchedAt = now
             )
         } else {
-            marketRate.value = goldRateService.fetchCurrentMarketSnapshot(savedRate24K)
+            val snapshot = goldRateService.fetchCurrentMarketSnapshot(savedRate24K)
+            marketRate.value = snapshot.copy(fetchedAt = now)
         }
     }
 }
@@ -181,7 +200,7 @@ fun DashboardScreen(
     val state by viewModel.uiState.collectAsState()
 
     LaunchedEffect(Unit) {
-        viewModel.refreshMarketRate(state.settings.goldRate24K)
+        viewModel.refreshMarketRate(state.settings.goldRate24K, force = false)
     }
 
     Scaffold(
@@ -247,27 +266,58 @@ fun DashboardScreen(
                     )
                 }
                 item {
-                    val location = listOf(state.marketRate.city, state.marketRate.state, state.marketRate.country)
-                        .filter { it.isNotBlank() }
-                        .joinToString(", ")
+                    val now = System.currentTimeMillis()
+                    val fetchedAt = state.marketRate.fetchedAt
+                    val fetchDisplay = if (fetchedAt <= 0L) {
+                        "Manual rate"
+                    } else {
+                        val cal = java.util.Calendar.getInstance()
+                        val todayMidnight = cal.clone() as java.util.Calendar
+                        todayMidnight.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                        todayMidnight.set(java.util.Calendar.MINUTE, 0)
+                        todayMidnight.set(java.util.Calendar.SECOND, 0)
+                        if (fetchedAt >= todayMidnight.timeInMillis) {
+                            // Same day — show time only (HH:mm)
+                            java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(fetchedAt))
+                        } else {
+                            // Previous day — show date
+                            java.text.SimpleDateFormat("dd MMM", java.util.Locale.getDefault()).format(java.util.Date(fetchedAt))
+                        }
+                    }
+                    // Clean source label — remove URL, keep name only
+                    val cleanSource = state.marketRate.sourceLabel
+                        .replace(Regex("https?://[^\\s]+"), "")
+                        .replace(Regex("\\s+"), " ")
+                        .trim()
+
                     GlassCard(Modifier.fillMaxWidth()) {
                         Row(
-                            Modifier.fillMaxWidth().padding(14.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Icon(Icons.Default.LocationOn, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
-                            Column(Modifier.weight(1f)) {
+                            // Left: Tamil Nadu (fixed, left-oriented)
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Icon(Icons.Default.LocationOn, null, tint = AuraColors.PrimaryContainer, modifier = Modifier.size(16.dp))
                                 Text(
-                                    if (location.isNotBlank()) location else "Tamil Nadu, India",
+                                    "Tamil Nadu",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = AuraColors.OnSurface,
                                     fontWeight = FontWeight.SemiBold
                                 )
+                            }
+                            // Right: source + timestamp (right-oriented)
+                            Column(horizontalAlignment = Alignment.End) {
                                 Text(
-                                    "${state.marketRate.sourceLabel} - manual rates stay saved",
+                                    cleanSource,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = AuraColors.OnSurfaceVariant,
+                                    fontSize = 10.sp
+                                )
+                                Text(
+                                    fetchDisplay,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AuraColors.PrimaryContainer,
                                     fontSize = 10.sp
                                 )
                             }

@@ -52,7 +52,8 @@ import javax.inject.Inject
 class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val companyProfileDao: CompanyProfileDao,
-    private val keystoreManager: KeystoreManager
+    private val keystoreManager: KeystoreManager,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context
 ) : ViewModel() {
 
     val settings = settingsRepo.settingsFlow
@@ -67,6 +68,27 @@ class SettingsViewModel @Inject constructor(
     fun updateUserPrefix(prefix: String) = viewModelScope.launch { settingsRepo.updateUserPrefix(prefix) }
     fun updateGoldRates(r24: Double, r22: Double, r20: Double, r18: Double) = viewModelScope.launch {
         settingsRepo.updateGoldRatesManual(r24, r22, r20, r18)
+    }
+
+    /** Fetch live rate from internet for the rate edit dialog — no PIN needed, user already in settings */
+    fun fetchLiveRateForDialog(onFetched: (Double?) -> Unit) = viewModelScope.launch {
+        try {
+            val service = com.goldsmith.billing.data.remote.GoldRateService(context)
+            val rates = service.fetchLatestGoldRates()
+            if (rates != null && rates.rate24K in 10_000.0..25_000.0) {
+                settingsRepo.updateGoldRatesManual(
+                    rate24K = rates.rate24K,
+                    rate22K = rates.rate22K ?: rates.rate24K * 0.916,
+                    rate20K = rates.rate20K ?: rates.rate24K * (20.0 / 24.0),
+                    rate18K = rates.rate18K ?: rates.rate24K * 0.75
+                )
+                onFetched(rates.rate24K)
+            } else {
+                onFetched(null)
+            }
+        } catch (_: Exception) {
+            onFetched(null)
+        }
     }
     fun saveProfile(profile: CompanyProfile) = viewModelScope.launch {
         companyProfileDao.upsertProfile(profile.copy(updatedAt = Date()))
@@ -636,6 +658,7 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
     }
 
     if (showRateDialog) {
+        var isRefreshingRate by remember { mutableStateOf(false) }
         EditRatesDialog(
             r24 = settings.goldRate24K,
             r22 = settings.goldRate22K,
@@ -645,7 +668,14 @@ fun SettingsScreen(onBack: () -> Unit, onImport: () -> Unit, viewModel: Settings
             onSave = { r24, r22, r20, r18 ->
                 viewModel.updateGoldRates(r24, r22, r20, r18)
                 showRateDialog = false
-            }
+            },
+            onRefresh = {
+                isRefreshingRate = true
+                viewModel.fetchLiveRateForDialog { fetchedRate ->
+                    isRefreshingRate = false
+                }
+            },
+            isRefreshing = isRefreshingRate
         )
     }
 
@@ -1123,7 +1153,10 @@ private fun ConfirmPinDialog(
 @Composable
 private fun EditRatesDialog(
     r24: Double, r22: Double, r20: Double, r18: Double,
-    onDismiss: () -> Unit, onSave: (Double, Double, Double, Double) -> Unit
+    onDismiss: () -> Unit,
+    onSave: (Double, Double, Double, Double) -> Unit,
+    onRefresh: (() -> Unit)? = null,    // small refresh icon to fetch live rate
+    isRefreshing: Boolean = false
 ) {
     var t24 by remember { mutableStateOf(r24.toString()) }
     var t22 by remember { mutableStateOf(r22.toString()) }
@@ -1132,7 +1165,24 @@ private fun EditRatesDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AuraColors.SurfaceContainerHigh,
-        title = { Text("Update Gold Rates", color = AuraColors.OnSurface) },
+        title = {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Update Gold Rates", color = AuraColors.OnSurface)
+                // Small refresh icon at top-right — fetches live rate from internet
+                if (onRefresh != null) {
+                    IconButton(onClick = onRefresh, modifier = Modifier.size(28.dp)) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp,
+                                color = AuraColors.PrimaryContainer)
+                        } else {
+                            Icon(Icons.Default.Refresh, "Fetch live rate",
+                                tint = AuraColors.PrimaryContainer, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                }
+            }
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 GhostTextField(t24, {
@@ -1157,7 +1207,6 @@ private fun EditRatesDialog(
             GoldButton("Save Rates", onClick = {
                 val rate24 = t24.toDoubleOrNull() ?: r24
                 val rate22 = t22.toDoubleOrNull() ?: r22
-                // Keep r20 and r18 as is or update based on new 24K if autoCalc
                 val rate20 = if (autoCalc) rate24 * 0.85 else r20
                 val rate18 = if (autoCalc) rate24 * 0.75 else r18
                 onSave(rate24, rate22, rate20, rate18)
